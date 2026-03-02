@@ -16,6 +16,9 @@ dependencies:
   flutter_rust_bridge: 2.11.1
   nebula_ui:
     path: ../shared/nebula_ui
+  firebase_core: ^3.8.1
+  firebase_auth: ^5.3.4
+  http: ^1.2.0
 
 dev_dependencies:
   flutter_test:

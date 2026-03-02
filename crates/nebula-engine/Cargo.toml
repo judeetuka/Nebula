@@ -9,19 +9,27 @@ crate-type = ["cdylib", "staticlib", "lib"]
 
 [dependencies]
 nebula-core = { path = "../nebula-core" }
+nebula-plugin-sdk = { path = "../nebula-plugin-sdk" }
 
 flutter_rust_bridge = "=2.11.1"
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+bincode.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+sha2.workspace = true
+hex.workspace = true
 
 rumqttd = "0.19"
 rumqttc = "0.24"
 libloading = "0.8"
+reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21", default-features = false }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

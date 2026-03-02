@@ -93,12 +93,34 @@ pub fn get_node_status() -> Result<String, String> {
     })
 }
 
-/// Start the engine (transition to Connecting).
+/// Start the engine and initiate connection to the proxy server.
 ///
-/// Actual WebSocket connection logic will be added in Phase 5.
-/// The engine must be configured before starting.
-pub fn start_engine() -> Result<(), String> {
-    with_engine(|engine| engine.start().map_err(|e| format!("{}", e)))
+/// Transitions to Connecting state, then spawns an async task that:
+/// 1. Connects to the proxy server via TCP
+/// 2. Registers the node (handshake)
+/// 3. Transitions through Registering -> Active
+/// 4. Starts MQTT broker if assigned Master role
+/// 5. Spawns a background heartbeat loop
+///
+/// Returns the assigned role as a string ("Master", "Worker", etc.) on
+/// success. On connection failure the engine transitions to Reconnecting.
+pub fn start_engine() -> Result<String, String> {
+    with_engine(|engine| {
+        // Synchronous state transition: Configured -> Connecting
+        engine.start().map_err(|e| format!("{}", e))?;
+
+        // Create a new tokio runtime for the async connection work.
+        // flutter_rust_bridge runs non-sync functions on a thread pool, so
+        // we need our own runtime to drive async I/O.
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
+
+        let role = rt.block_on(engine.connect_to_server()).map_err(|e| {
+            format!("Connection failed: {}", e)
+        })?;
+
+        Ok(format!("{}", role))
+    })
 }
 
 /// Shut down the engine gracefully.

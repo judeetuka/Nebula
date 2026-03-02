@@ -13,8 +13,8 @@ class LoginPage extends ConsumerStatefulWidget {
 }
 
 class _LoginPageState extends ConsumerState<LoginPage> {
-  final _emailController = TextEditingController(text: 'admin@nebula.io');
-  final _passwordController = TextEditingController(text: 'admin');
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
   @override
@@ -32,8 +32,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           password: _passwordController.text,
         );
 
-    if (success && mounted) {
+    if (!mounted) return;
+
+    if (success) {
+      NotificationToast.success(context, 'Signed in successfully');
       Navigator.of(context).pushReplacementNamed(AppRoutes.dashboard);
+    } else {
+      final error = ref.read(authProvider).error ?? 'Sign-in failed';
+      NotificationToast.error(context, error);
     }
   }
 
@@ -108,16 +114,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       return null;
                     },
                   ),
-                  if (authState.error != null) ...[
-                    const SizedBox(height: UIConstants.spacingMD),
-                    Text(
-                      authState.error!,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.error,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
                   const SizedBox(height: UIConstants.spacingXL),
                   SizedBox(
                     height: UIConstants.buttonLG,
@@ -133,14 +129,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                             )
                           : const Text('Sign In'),
                     ),
-                  ),
-                  const SizedBox(height: UIConstants.spacingLG),
-                  Text(
-                    'Stub: admin@nebula.io / admin',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.outline,
-                    ),
-                    textAlign: TextAlign.center,
                   ),
                 ],
               ),

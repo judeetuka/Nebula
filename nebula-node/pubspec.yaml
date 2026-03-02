@@ -18,6 +18,8 @@ dependencies:
     path: ../shared/nebula_ui
   webview_flutter: ^4.13.0
   shared_preferences: ^2.3.4
+  mobile_scanner: ^6.0.0
+  permission_handler: ^11.0.0
 
 dev_dependencies:
   flutter_test:

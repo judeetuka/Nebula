@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:nebula_ui/nebula_ui.dart';
 
+import '../../../../core/di/injection.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../cluster/presentation/pages/dashboard_page.dart';
 import '../../../cluster/presentation/providers/cluster_provider.dart';
@@ -60,7 +61,7 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       case 1:
         return const DashboardPage();
       case 2:
-        return const _SettingsPlaceholder();
+        return const _SettingsPage();
       default:
         return const _OverviewPage();
     }
@@ -104,7 +105,7 @@ class _ShellPageState extends ConsumerState<ShellPage> {
                       bottom: UIConstants.spacingLG,
                     ),
                     child: IconButton(
-                      onPressed: _handleSignOut,
+                      onPressed: () => _confirmSignOut(context),
                       icon: const Icon(Icons.logout),
                       tooltip: 'Sign Out',
                     ),
@@ -128,6 +129,16 @@ class _ShellPageState extends ConsumerState<ShellPage> {
             setState(() => _selectedIndex = index),
         destinations: _destinations,
       ),
+    );
+  }
+
+  void _confirmSignOut(BuildContext context) {
+    AppAlertDialog.showDanger(
+      context: context,
+      title: 'Sign Out',
+      message: 'Are you sure you want to sign out of NEBULA Admin?',
+      actionText: 'Sign Out',
+      onActionPressed: _handleSignOut,
     );
   }
 }
@@ -160,7 +171,8 @@ class _OverviewPage extends ConsumerWidget {
                 const SizedBox(width: UIConstants.spacingMD),
                 _StatCard(
                   label: 'Total Nodes',
-                  value: '${clustersState.clusters.fold<int>(0, (sum, c) => sum + c.nodeCount)}',
+                  value:
+                      '${clustersState.clusters.fold<int>(0, (sum, c) => sum + c.nodeCount)}',
                   icon: Icons.devices,
                   color: theme.colorScheme.secondary,
                 ),
@@ -208,33 +220,199 @@ class _StatCard extends StatelessWidget {
   }
 }
 
-class _SettingsPlaceholder extends StatelessWidget {
-  const _SettingsPlaceholder();
+/// Real Settings page with server configuration, sign out, and app info.
+class _SettingsPage extends ConsumerStatefulWidget {
+  const _SettingsPage();
+
+  @override
+  ConsumerState<_SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends ConsumerState<_SettingsPage> {
+  late TextEditingController _serverUrlController;
+
+  @override
+  void initState() {
+    super.initState();
+    _serverUrlController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _serverUrlController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleSignOut() async {
+    await ref.read(authProvider.notifier).signOut();
+    if (mounted) {
+      Navigator.of(context).pushReplacementNamed(AppRoutes.login);
+    }
+  }
+
+  void _confirmSignOut() {
+    AppAlertDialog.showDanger(
+      context: context,
+      title: 'Sign Out',
+      message: 'Are you sure you want to sign out of NEBULA Admin?',
+      actionText: 'Sign Out',
+      onActionPressed: _handleSignOut,
+    );
+  }
+
+  void _editServerUrl() {
+    final currentUrl = ref.read(serverUrlProvider);
+    AppAlertDialog.showWithInput(
+      context: context,
+      title: 'Server URL',
+      message: 'Enter the nebula-server base URL.',
+      actionText: 'Save',
+      hintText: 'http://localhost:8080',
+      initialValue: currentUrl,
+      validator: (value) {
+        if (value.isEmpty) return 'URL is required';
+        final uri = Uri.tryParse(value);
+        if (uri == null || !uri.hasScheme) return 'Enter a valid URL';
+        return null;
+      },
+      onActionPressed: (value) {
+        ref.read(serverUrlProvider.notifier).state = value;
+        NotificationToast.success(context, 'Server URL updated');
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final currentServerUrl = ref.watch(serverUrlProvider);
+    final authState = ref.watch(authProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.construction,
-              size: 64,
-              color: theme.colorScheme.outlineVariant,
+      appBar: BlurredAppBar(title: 'Settings'),
+      body: ListView(
+        children: [
+          const SizedBox(height: UIConstants.spacingMD),
+
+          // --- Account section ---
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 8,
             ),
-            const SizedBox(height: UIConstants.spacingMD),
-            Text(
-              'Settings coming soon',
-              style: theme.textTheme.titleMedium?.copyWith(
+            child: Text(
+              'Account',
+              style: theme.textTheme.titleSmall?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          if (authState.user != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 20,
+                    backgroundColor: theme.colorScheme.primaryContainer,
+                    child: Text(
+                      (authState.user!.displayName ?? authState.user!.email)
+                          .substring(0, 1)
+                          .toUpperCase(),
+                      style: TextStyle(
+                        color: theme.colorScheme.onPrimaryContainer,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          authState.user!.displayName ?? 'NEBULA User',
+                          style: theme.textTheme.titleMedium,
+                        ),
+                        Text(
+                          authState.user!.email,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ActionTile(
+            icon: Icons.logout,
+            title: 'Sign Out',
+            isDestructive: true,
+            onTap: _confirmSignOut,
+          ),
+
+          const Divider(height: 32),
+
+          // --- Server section ---
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 8,
+            ),
+            child: Text(
+              'Server',
+              style: theme.textTheme.titleSmall?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          ActionTile(
+            icon: Icons.dns_outlined,
+            title: 'Server URL',
+            onTap: _editServerUrl,
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 64),
+            child: Text(
+              currentServerUrl,
+              style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
-          ],
-        ),
+          ),
+
+          const Divider(height: 32),
+
+          // --- About section ---
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 8,
+            ),
+            child: Text(
+              'About',
+              style: theme.textTheme.titleSmall?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          ActionTile(
+            icon: Icons.info_outline,
+            title: 'App Version',
+            onTap: () {
+              AppAlertDialog.showInfo(
+                context: context,
+                title: 'NEBULA Admin',
+                message: 'Version 0.1.0+1\nDistributed compute cluster dashboard.',
+              );
+            },
+          ),
+        ],
       ),
     );
   }

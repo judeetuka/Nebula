@@ -8,33 +8,12 @@ use libloading::{Library, Symbol};
 use super::sdk::{create_plugin_context, drop_host_data, PluginContext};
 use super::types::{PluginManifest, PluginState};
 
-/// Function signature for the plugin's initialization entry point.
-///
-/// The host calls this once after loading the library. The plugin receives
-/// a pointer to a `PluginContext` it can use to call back into the host.
-/// Returns 0 on success, non-zero on failure.
-type PluginInitFn = unsafe extern "C" fn(*const PluginContext) -> i32;
+// Use ABI type definitions from the SDK.
+use nebula_plugin_sdk::abi::{PluginExecuteFn, PluginInitFn, PluginShutdownFn};
 
-/// Function signature for the plugin's main execution entry point.
-///
-/// The host passes an input buffer and an output buffer. The plugin writes
-/// its result into `output` and returns the number of bytes written, or a
-/// negative value on error.
-type PluginExecuteFn = unsafe extern "C" fn(*const u8, usize, *mut u8, usize) -> i32;
-
-/// Function signature for the plugin's graceful shutdown hook.
-///
-/// Called before the library is unloaded. Returns 0 on success.
-type PluginShutdownFn = unsafe extern "C" fn() -> i32;
-
-/// Function signature for querying the plugin's version string.
-///
-/// Returns a pointer to a null-terminated C string that must remain valid
-/// for the lifetime of the library.
-///
 /// Not used yet -- kept as part of the ABI specification for future use.
 #[allow(dead_code)]
-type PluginVersionFn = unsafe extern "C" fn() -> *const std::ffi::c_char;
+type PluginVersionFn = nebula_plugin_sdk::abi::PluginVersionFn;
 
 /// A plugin that has been (or can be) loaded from a shared object file.
 ///
@@ -366,6 +345,7 @@ mod tests {
             abi: "x86_64".to_string(),
             entry_symbol: "nebula_plugin_init".to_string(),
             capabilities: vec![PluginCapability::Network],
+            depends_on: vec![],
         }
     }
 

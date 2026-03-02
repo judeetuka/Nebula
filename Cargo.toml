@@ -1,6 +1,15 @@
 [workspace]
 resolver = "2"
-members = ["crates/nebula-core", "crates/nebula-server", "crates/nebula-engine"]
+members = [
+    "crates/nebula-core",
+    "crates/nebula-server",
+    "crates/nebula-engine",
+    "crates/nebula-plugin-sdk",
+]
+exclude = [
+    "nebula-node/rust",
+    "nebula-admin/rust",
+]
 
 [workspace.package]
 edition = "2021"

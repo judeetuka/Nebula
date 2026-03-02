@@ -1,14 +1,67 @@
-// Re-export all types from the SDK so existing code doesn't break.
-pub use nebula_plugin_sdk::capabilities::PluginCapability;
-pub use nebula_plugin_sdk::manifest::{PluginDependency, PluginManifest, PluginState};
+//! Plugin manifest and lifecycle state definitions.
+//!
+//! A manifest describes a plugin binary: its identity, ABI target, entry
+//! symbol, capabilities, and dependencies on other plugins.
+
+use serde::{Deserialize, Serialize};
+
+use crate::capabilities::PluginCapability;
+
+/// Describes a plugin binary: its identity, ABI target, entry symbol, and
+/// the set of platform capabilities it requires.
+///
+/// A manifest is shipped alongside (or embedded in) the `.so` file and is
+/// persisted by the registry so that plugin metadata survives engine restarts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginManifest {
+    /// Unique identifier for this plugin (e.g. "com.nebula.sms-forwarder").
+    pub id: String,
+    /// Human-readable name shown in the admin dashboard.
+    pub name: String,
+    /// Semantic version string (e.g. "1.2.0").
+    pub version: String,
+    /// Short description of what the plugin does.
+    pub description: String,
+    /// Author or organization name.
+    pub author: String,
+    /// Target ABI the `.so` was compiled for (e.g. "aarch64", "armv7", "x86_64").
+    pub abi: String,
+    /// Name of the exported `extern "C"` init symbol. Default: `"nebula_plugin_init"`.
+    pub entry_symbol: String,
+    /// Platform capabilities this plugin declares it needs.
+    pub capabilities: Vec<PluginCapability>,
+    /// Plugin dependencies -- other plugins this one requires.
+    #[serde(default)]
+    pub depends_on: Vec<PluginDependency>,
+}
+
+/// A dependency on another plugin.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginDependency {
+    /// The plugin ID this depends on (e.g., "com.nebula.email").
+    pub id: String,
+    /// Minimum required version (semver string).
+    pub min_version: String,
+}
+
+/// Lifecycle state of a plugin within the registry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PluginState {
+    /// Binary is on disk but has not been loaded.
+    Downloaded,
+    /// The library is being dlopen'd and symbols resolved.
+    Loading,
+    /// Plugin is initialized and ready to execute tasks.
+    Active,
+    /// An error occurred during loading, initialization, or execution.
+    Error { message: String },
+    /// The plugin is being shut down and unloaded.
+    Unloading,
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // -------------------------------------------------------------------
-    // PluginManifest
-    // -------------------------------------------------------------------
 
     fn sample_manifest() -> PluginManifest {
         PluginManifest {
@@ -23,6 +76,10 @@ mod tests {
             depends_on: vec![],
         }
     }
+
+    // -------------------------------------------------------------------
+    // PluginManifest
+    // -------------------------------------------------------------------
 
     #[test]
     fn test_manifest_serialization_roundtrip() {
@@ -101,61 +158,74 @@ mod tests {
         assert_eq!(manifest.capabilities.len(), 2);
         assert_eq!(manifest.capabilities[0], PluginCapability::Sms);
         assert_eq!(manifest.capabilities[1], PluginCapability::Network);
-    }
-
-    // -------------------------------------------------------------------
-    // PluginCapability
-    // -------------------------------------------------------------------
-
-    #[test]
-    fn test_all_capability_variants_serialize() {
-        let capabilities = vec![
-            PluginCapability::Sms,
-            PluginCapability::Ussd,
-            PluginCapability::Telephony,
-            PluginCapability::Email,
-            PluginCapability::Notification,
-            PluginCapability::Accessibility,
-            PluginCapability::FileAccess,
-            PluginCapability::Storage,
-            PluginCapability::Network,
-            PluginCapability::Wifi,
-            PluginCapability::Bluetooth,
-            PluginCapability::Camera,
-            PluginCapability::Audio,
-            PluginCapability::Location,
-            PluginCapability::Sensors,
-            PluginCapability::Clipboard,
-            PluginCapability::AppManagement,
-            PluginCapability::ScreenControl,
-            PluginCapability::PowerManagement,
-            PluginCapability::DeviceAdmin,
-            PluginCapability::WebView,
-            PluginCapability::Contacts,
-            PluginCapability::Calendar,
-            PluginCapability::Overlay,
-            PluginCapability::Custom("my_cap".to_string()),
-        ];
-
-        for cap in &capabilities {
-            let json = serde_json::to_string(cap).unwrap();
-            let deserialized: PluginCapability = serde_json::from_str(&json).unwrap();
-            assert_eq!(*cap, deserialized);
-        }
+        // depends_on defaults to empty
+        assert!(manifest.depends_on.is_empty());
     }
 
     #[test]
-    fn test_capability_equality() {
-        assert_eq!(PluginCapability::Sms, PluginCapability::Sms);
-        assert_ne!(PluginCapability::Sms, PluginCapability::Ussd);
-        assert_ne!(
-            PluginCapability::Custom("a".to_string()),
-            PluginCapability::Custom("b".to_string())
-        );
-        assert_eq!(
-            PluginCapability::Custom("same".to_string()),
-            PluginCapability::Custom("same".to_string())
-        );
+    fn test_manifest_with_dependencies() {
+        let manifest = PluginManifest {
+            id: "com.nebula.forwarder".to_string(),
+            name: "SMS Forwarder".to_string(),
+            version: "2.0.0".to_string(),
+            description: "Forwards SMS via email".to_string(),
+            author: "Nebula".to_string(),
+            abi: "aarch64".to_string(),
+            entry_symbol: "nebula_plugin_init".to_string(),
+            capabilities: vec![PluginCapability::Sms, PluginCapability::Email],
+            depends_on: vec![
+                PluginDependency {
+                    id: "com.nebula.email".to_string(),
+                    min_version: "1.0.0".to_string(),
+                },
+                PluginDependency {
+                    id: "com.nebula.contacts".to_string(),
+                    min_version: "0.5.0".to_string(),
+                },
+            ],
+        };
+
+        let json = serde_json::to_string(&manifest).unwrap();
+        let deserialized: PluginManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(manifest, deserialized);
+        assert_eq!(deserialized.depends_on.len(), 2);
+        assert_eq!(deserialized.depends_on[0].id, "com.nebula.email");
+        assert_eq!(deserialized.depends_on[0].min_version, "1.0.0");
+    }
+
+    // -------------------------------------------------------------------
+    // PluginDependency
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_dependency_serialization_roundtrip() {
+        let dep = PluginDependency {
+            id: "com.nebula.email".to_string(),
+            min_version: "1.2.3".to_string(),
+        };
+
+        let json = serde_json::to_string(&dep).unwrap();
+        let deserialized: PluginDependency = serde_json::from_str(&json).unwrap();
+        assert_eq!(dep, deserialized);
+    }
+
+    #[test]
+    fn test_dependency_equality() {
+        let dep_a = PluginDependency {
+            id: "com.nebula.email".to_string(),
+            min_version: "1.0.0".to_string(),
+        };
+        let dep_b = PluginDependency {
+            id: "com.nebula.email".to_string(),
+            min_version: "1.0.0".to_string(),
+        };
+        let dep_c = PluginDependency {
+            id: "com.nebula.email".to_string(),
+            min_version: "2.0.0".to_string(),
+        };
+
+        assert_eq!(dep_a, dep_b);
+        assert_ne!(dep_a, dep_c);
     }
 
     // -------------------------------------------------------------------

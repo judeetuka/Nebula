@@ -1,15 +1,18 @@
 use std::sync::{Arc, RwLock as StdRwLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use nebula_core::identity::node_id::NodeId;
+use nebula_core::identity::node_id::{ClusterId, NodeId};
 use nebula_core::identity::roles::NodeRole;
+use nebula_core::protocol::messages::{NetworkType, NodeHeartBeatPayload};
 use tokio::sync::{broadcast, Mutex as TokioMutex, RwLock};
-use tracing::info;
+use tracing::{error, info, warn};
 
 use crate::cluster::membership::ClusterMembership;
 use crate::identity::local_identity::LocalIdentity;
 use crate::mqtt::broker::EmbeddedBroker;
 use crate::mqtt::client::MqttClient;
+use crate::net::tunnel_client::TunnelClient;
 use crate::plugins::registry::PluginRegistry;
 use crate::routing::smart_router::SmartRouter;
 use crate::runtime::state::NodeState;
@@ -24,6 +27,9 @@ const DEFAULT_MAX_CONCURRENT: usize = 5;
 
 /// Default plugin directory name (relative to the storage path).
 const DEFAULT_PLUGIN_DIR: &str = "plugins";
+
+/// Heartbeat interval for sending node health metrics to the proxy server.
+const HEARTBEAT_INTERVAL_SECS: u64 = 10;
 
 /// The NEBULA node engine.
 ///
@@ -42,6 +48,10 @@ pub struct NebulaEngine {
     task_dispatcher: Arc<StdRwLock<TaskDispatcher>>,
     task_executor: Arc<StdRwLock<TaskExecutor>>,
     plugin_registry: Arc<StdRwLock<PluginRegistry>>,
+    tunnel_client: Arc<TokioMutex<Option<TunnelClient>>>,
+    /// Monotonic instant recorded when the engine is created, used to compute
+    /// uptime in heartbeat payloads.
+    started_at: Instant,
 }
 
 impl NebulaEngine {
@@ -92,6 +102,8 @@ impl NebulaEngine {
             task_dispatcher: Arc::new(StdRwLock::new(task_dispatcher)),
             task_executor: Arc::new(StdRwLock::new(task_executor)),
             plugin_registry: Arc::new(StdRwLock::new(plugin_registry)),
+            tunnel_client: Arc::new(TokioMutex::new(None)),
+            started_at: Instant::now(),
         })
     }
 
@@ -126,18 +138,178 @@ impl NebulaEngine {
 
     /// Transition the engine to `Connecting` state.
     ///
-    /// MQTT broker and client initialization will occur when the node
-    /// reaches the `Active` state. For now this validates the state
-    /// transition and signals readiness to connect.
+    /// This is the synchronous entry point called from FFI. It validates the
+    /// state transition but does not perform any network I/O. Call
+    /// `connect_to_server()` afterwards to perform the actual registration.
     pub fn start(&self) -> Result<()> {
-        info!("Engine starting — MQTT will be initialized when Active");
+        info!("Engine starting -- transitioning to Connecting");
         self.transition_state(NodeState::Connecting)
+    }
+
+    /// Connect to the proxy server, register, and enter the active state.
+    ///
+    /// This is the async counterpart to `start()`. It performs:
+    /// 1. TCP connection to the proxy server
+    /// 2. Node registration handshake
+    /// 3. State transition through Registering to Active
+    /// 4. MQTT broker start (if assigned Master role)
+    /// 5. Heartbeat loop spawn
+    ///
+    /// On failure, transitions to `Reconnecting` state.
+    pub async fn connect_to_server(&self) -> Result<NodeRole> {
+        let server_url = self
+            .identity
+            .server_url()
+            .context("Server URL not configured")?
+            .to_string();
+        let cluster_id_str = self
+            .identity
+            .cluster_id()
+            .context("Cluster ID not configured")?
+            .to_string();
+        let node_id = self.identity.node_id();
+
+        // Create tunnel client and attempt registration
+        let mut tunnel = TunnelClient::new(&server_url);
+        let role = match tunnel
+            .connect_and_register(node_id, ClusterId(cluster_id_str))
+            .await
+        {
+            Ok(role) => role,
+            Err(e) => {
+                warn!(error = %e, "Failed to connect to server, transitioning to Reconnecting");
+                self.transition_state(NodeState::Reconnecting { attempts: 1 })?;
+                return Err(e);
+            }
+        };
+
+        // Transition: Connecting -> Registering -> Active
+        self.transition_state(NodeState::Registering)?;
+        self.transition_state(NodeState::Active { role })?;
+
+        // If Master, start MQTT broker
+        if role == NodeRole::Master {
+            let mut broker_lock = self.mqtt_broker.lock().await;
+            let mut broker = EmbeddedBroker::new(1883);
+            broker.start()?;
+            *broker_lock = Some(broker);
+            info!("MQTT broker started (master role)");
+        }
+
+        // Store the tunnel client
+        {
+            let mut tc = self.tunnel_client.lock().await;
+            *tc = Some(tunnel);
+        }
+
+        // Spawn heartbeat loop with real device metrics collection
+        let tunnel_client = Arc::clone(&self.tunnel_client);
+        let task_executor = Arc::clone(&self.task_executor);
+        let shutdown_rx = self.subscribe_shutdown();
+        let hb_node_id = node_id;
+        let started_at = self.started_at;
+
+        tokio::spawn(async move {
+            run_heartbeat_loop(
+                tunnel_client,
+                hb_node_id,
+                shutdown_rx,
+                task_executor,
+                started_at,
+            )
+            .await;
+        });
+
+        Ok(role)
+    }
+
+    /// Combined sync start + async connect.
+    ///
+    /// Transitions to Connecting, then spawns the async connection work.
+    /// Returns a `JoinHandle` for the async connection task. The caller
+    /// can await the handle to get the assigned role or an error.
+    pub fn start_and_connect(
+        &self,
+    ) -> Result<tokio::task::JoinHandle<Result<NodeRole>>> {
+        self.start()?;
+
+        let state = Arc::clone(&self.state);
+        let tunnel_client = Arc::clone(&self.tunnel_client);
+        let mqtt_broker = Arc::clone(&self.mqtt_broker);
+        let task_executor = Arc::clone(&self.task_executor);
+        let shutdown_tx = self.shutdown_tx.as_ref().map(|tx| tx.subscribe());
+        let started_at = self.started_at;
+
+        let server_url = self
+            .identity
+            .server_url()
+            .context("Server URL not configured")?
+            .to_string();
+        let cluster_id_str = self
+            .identity
+            .cluster_id()
+            .context("Cluster ID not configured")?
+            .to_string();
+        let node_id = self.identity.node_id();
+
+        let handle = tokio::spawn(async move {
+            // Create tunnel client and attempt registration
+            let mut tunnel = TunnelClient::new(&server_url);
+            let role = match tunnel
+                .connect_and_register(node_id, ClusterId(cluster_id_str))
+                .await
+            {
+                Ok(role) => role,
+                Err(e) => {
+                    warn!(error = %e, "Failed to connect to server");
+                    let mut s = state.write().await;
+                    *s = NodeState::Reconnecting { attempts: 1 };
+                    return Err(e);
+                }
+            };
+
+            // Transition: Connecting -> Registering -> Active
+            {
+                let mut s = state.write().await;
+                *s = NodeState::Registering;
+            }
+            {
+                let mut s = state.write().await;
+                *s = NodeState::Active { role };
+            }
+
+            // If Master, start MQTT broker
+            if role == NodeRole::Master {
+                let mut broker_lock = mqtt_broker.lock().await;
+                let mut broker = EmbeddedBroker::new(1883);
+                broker.start()?;
+                *broker_lock = Some(broker);
+                info!("MQTT broker started (master role)");
+            }
+
+            // Store the tunnel client
+            {
+                let mut tc = tunnel_client.lock().await;
+                *tc = Some(tunnel);
+            }
+
+            // Spawn heartbeat loop with real device metrics
+            let hb_tunnel = Arc::clone(&tunnel_client);
+            let hb_executor = Arc::clone(&task_executor);
+            tokio::spawn(async move {
+                run_heartbeat_loop(hb_tunnel, node_id, shutdown_tx, hb_executor, started_at).await;
+            });
+
+            Ok(role)
+        });
+
+        Ok(handle)
     }
 
     /// Initiate a graceful shutdown.
     ///
     /// Transitions to `ShuttingDown` and broadcasts a shutdown signal to all
-    /// listeners.
+    /// listeners. Also disconnects the tunnel client if connected.
     pub fn shutdown(&self) -> Result<()> {
         self.transition_state(NodeState::ShuttingDown)?;
 
@@ -151,10 +323,14 @@ impl NebulaEngine {
 
     /// Returns a clone of the current engine state.
     ///
-    /// Uses `blocking_read()` which is safe to call from non-async contexts
-    /// (e.g. Flutter FFI sync functions).
+    /// Safe to call from both sync (FFI) and async contexts.
+    /// Uses `try_read()` first (non-blocking), falls back to `blocking_read()`
+    /// when not inside a tokio runtime.
     pub fn state(&self) -> NodeState {
-        self.state.blocking_read().clone()
+        match self.state.try_read() {
+            Ok(guard) => guard.clone(),
+            Err(_) => self.state.blocking_read().clone(),
+        }
     }
 
     /// Returns the node's persistent identity.
@@ -217,12 +393,21 @@ impl NebulaEngine {
         &self.plugin_registry
     }
 
+    /// Returns a reference to the tunnel client handle.
+    pub fn tunnel_client(&self) -> &Arc<TokioMutex<Option<TunnelClient>>> {
+        &self.tunnel_client
+    }
+
     /// Validate and apply a state transition.
     ///
-    /// Returns an error if the transition is not valid according to the state
-    /// machine rules defined in `NodeState::can_transition_to`.
+    /// Safe to call from both sync and async contexts. Uses `try_write()` which
+    /// is non-blocking. The state lock is never contended in normal operation
+    /// since all state transitions are sequential.
     fn transition_state(&self, target: NodeState) -> Result<()> {
-        let mut state = self.state.blocking_write();
+        let mut state = self
+            .state
+            .try_write()
+            .map_err(|_| anyhow::anyhow!("State lock contended during transition"))?;
         if !state.can_transition_to(&target) {
             bail!(
                 "Invalid state transition: {} -> {}",
@@ -233,6 +418,122 @@ impl NebulaEngine {
         *state = target;
         Ok(())
     }
+}
+
+/// Collect real device metrics from Android platform channels.
+///
+/// On Android, this calls into the Kotlin `NebulaPlatformBridge` via JNI
+/// to read battery level, CPU load, RAM, and network type. On non-Android
+/// platforms (desktop, tests), the platform calls return errors and the
+/// values gracefully fall back to zero/defaults.
+fn collect_device_metrics(
+    node_id: NodeId,
+    task_executor: &Arc<StdRwLock<TaskExecutor>>,
+    started_at: Instant,
+) -> NodeHeartBeatPayload {
+    // Battery level from Android device.getBatteryInfo
+    let battery_level = crate::platform::invoke_android("device", "getBatteryInfo", "{}")
+        .ok()
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+        .and_then(|v| v["level"].as_u64())
+        .unwrap_or(0) as u8;
+
+    // CPU load from Android system.getCpuInfo
+    let cpu_load = crate::platform::invoke_android("system", "getCpuInfo", "{}")
+        .ok()
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+        .and_then(|v| v["loadPercent"].as_f64())
+        .unwrap_or(0.0) as f32;
+
+    // Available RAM from Android system.getRamInfo
+    let memory_available_mb = crate::platform::invoke_android("system", "getRamInfo", "{}")
+        .ok()
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+        .and_then(|v| v["availableMb"].as_u64())
+        .unwrap_or(0) as u32;
+
+    // Network type from Android device.getNetworkInfo
+    let network_type = crate::platform::invoke_android("device", "getNetworkInfo", "{}")
+        .ok()
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+        .and_then(|v| v["type"].as_str().map(String::from))
+        .map(|t| match t.to_lowercase().as_str() {
+            "wifi" => NetworkType::Wifi,
+            "cellular" | "mobile" => NetworkType::Cellular,
+            "ethernet" => NetworkType::Ethernet,
+            _ => NetworkType::Unknown,
+        })
+        .unwrap_or(NetworkType::Unknown);
+
+    // Active task count from the executor
+    let active_tasks = task_executor
+        .read()
+        .map(|exec| exec.active_count() as u16)
+        .unwrap_or(0);
+
+    // Uptime in seconds since the engine was created
+    let uptime_secs = started_at.elapsed().as_secs();
+
+    NodeHeartBeatPayload {
+        node_id,
+        battery_level,
+        cpu_load,
+        memory_available_mb,
+        uptime_secs,
+        active_tasks,
+        network_type,
+        timestamp: chrono::Utc::now().timestamp(),
+    }
+}
+
+/// Background heartbeat loop that sends periodic health metrics to the proxy
+/// server over the tunnel client's control channel.
+///
+/// The loop runs until a shutdown signal is received or the tunnel client
+/// is disconnected. Collects real device metrics via Android platform channels
+/// on each interval.
+async fn run_heartbeat_loop(
+    tunnel_client: Arc<TokioMutex<Option<TunnelClient>>>,
+    node_id: NodeId,
+    mut shutdown_rx: Option<broadcast::Receiver<bool>>,
+    task_executor: Arc<StdRwLock<TaskExecutor>>,
+    started_at: Instant,
+) {
+    let interval = Duration::from_secs(HEARTBEAT_INTERVAL_SECS);
+
+    loop {
+        // Check for shutdown signal
+        if let Some(ref mut rx) = shutdown_rx {
+            match rx.try_recv() {
+                Ok(true) => {
+                    info!("Heartbeat loop: shutdown signal received");
+                    break;
+                }
+                Err(broadcast::error::TryRecvError::Closed) => {
+                    info!("Heartbeat loop: shutdown channel closed");
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        tokio::time::sleep(interval).await;
+
+        let payload = collect_device_metrics(node_id, &task_executor, started_at);
+
+        let mut tc = tunnel_client.lock().await;
+        if let Some(ref mut client) = *tc {
+            if let Err(e) = client.send_heartbeat(payload).await {
+                error!(error = %e, "Failed to send heartbeat");
+                break;
+            }
+        } else {
+            warn!("Heartbeat loop: tunnel client not available");
+            break;
+        }
+    }
+
+    info!("Heartbeat loop exited");
 }
 
 #[cfg(test)]
@@ -556,6 +857,177 @@ mod tests {
 
         let expected_dir = format!("{}/{}", dir.to_str().unwrap(), DEFAULT_PLUGIN_DIR);
         assert_eq!(registry.plugin_dir(), expected_dir);
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_engine_tunnel_client_initially_none() {
+        let dir = temp_test_dir("tunnel_none");
+        let engine = NebulaEngine::new(dir.to_str().unwrap()).unwrap();
+
+        let tc = engine.tunnel_client().blocking_lock();
+        assert!(tc.is_none());
+
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_connect_to_server_without_config_fails() {
+        let dir = temp_test_dir("connect_no_config");
+        let engine = NebulaEngine::new(dir.to_str().unwrap()).unwrap();
+
+        let result = engine.connect_to_server().await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not configured")
+        );
+
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_connect_to_server_with_mock_server() {
+        use tokio::net::TcpListener;
+
+        let dir = temp_test_dir("connect_mock");
+        let mut engine = NebulaEngine::new(dir.to_str().unwrap()).unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        engine
+            .configure("test-cluster", &addr.to_string(), "token")
+            .unwrap();
+        engine.start().unwrap();
+
+        // Mock server
+        let server_handle = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            use crate::net::codec;
+            let _hello = codec::read_hello(&mut stream).await.unwrap();
+            let ack = nebula_core::protocol::messages::Ack::RegistrationAccepted {
+                assigned_role: NodeRole::Worker,
+            };
+            codec::write_msg(&mut stream, &ack).await.unwrap();
+
+            // Hold the connection open briefly so heartbeat loop doesn't fail
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        });
+
+        let role = engine.connect_to_server().await.unwrap();
+        assert_eq!(role, NodeRole::Worker);
+        assert_eq!(
+            engine.state(),
+            NodeState::Active {
+                role: NodeRole::Worker
+            }
+        );
+
+        // Tunnel client should be stored
+        let tc = engine.tunnel_client().lock().await;
+        assert!(tc.is_some());
+        drop(tc);
+
+        // Shutdown to stop heartbeat loop
+        engine.shutdown().unwrap();
+
+        server_handle.await.unwrap();
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_connect_to_server_failure_transitions_to_reconnecting() {
+        let dir = temp_test_dir("connect_fail_reconnect");
+        let mut engine = NebulaEngine::new(dir.to_str().unwrap()).unwrap();
+
+        // Use a port that nothing is listening on
+        engine
+            .configure("test-cluster", "127.0.0.1:1", "token")
+            .unwrap();
+        engine.start().unwrap();
+
+        let result = engine.connect_to_server().await;
+        assert!(result.is_err());
+
+        assert_eq!(
+            engine.state(),
+            NodeState::Reconnecting { attempts: 1 }
+        );
+
+        cleanup(&dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // collect_device_metrics tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_collect_device_metrics_returns_defaults_on_non_android() {
+        let dir = temp_test_dir("metrics_defaults");
+        let engine = NebulaEngine::new(dir.to_str().unwrap()).unwrap();
+
+        let payload = collect_device_metrics(
+            engine.node_id(),
+            engine.task_executor(),
+            engine.started_at,
+        );
+
+        // On non-Android, platform calls fail => all values default to 0
+        assert_eq!(payload.node_id, engine.node_id());
+        assert_eq!(payload.battery_level, 0);
+        assert_eq!(payload.cpu_load, 0.0);
+        assert_eq!(payload.memory_available_mb, 0);
+        assert_eq!(payload.active_tasks, 0);
+        assert_eq!(payload.network_type, NetworkType::Unknown);
+        assert!(payload.uptime_secs < 5); // Just created, uptime should be near zero
+        assert!(payload.timestamp > 0);
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_collect_device_metrics_reads_active_tasks() {
+        use crate::tasks::types::{TaskId, TaskPayload, TaskPriority, TaskType};
+
+        let dir = temp_test_dir("metrics_tasks");
+        let engine = NebulaEngine::new(dir.to_str().unwrap()).unwrap();
+
+        // Add some tasks to the executor
+        {
+            let mut executor = engine.task_executor().write().unwrap();
+            executor
+                .accept_task(TaskPayload {
+                    task_id: TaskId("t1".to_string()),
+                    task_type: TaskType::Ping,
+                    data: serde_json::json!({}),
+                    timeout_secs: 90,
+                    submitted_at: chrono::Utc::now().timestamp_millis(),
+                    priority: TaskPriority::Normal,
+                })
+                .unwrap();
+            executor
+                .accept_task(TaskPayload {
+                    task_id: TaskId("t2".to_string()),
+                    task_type: TaskType::Ping,
+                    data: serde_json::json!({}),
+                    timeout_secs: 90,
+                    submitted_at: chrono::Utc::now().timestamp_millis(),
+                    priority: TaskPriority::Normal,
+                })
+                .unwrap();
+        }
+
+        let payload = collect_device_metrics(
+            engine.node_id(),
+            engine.task_executor(),
+            engine.started_at,
+        );
+
+        assert_eq!(payload.active_tasks, 2);
 
         cleanup(&dir);
     }

@@ -5,8 +5,15 @@ import '../../data/datasources/qr_scanner_source.dart';
 import '../../domain/entities/qr_payload.dart';
 import '../../domain/usecases/scan_and_join.dart';
 
-final qrScannerSourceProvider = Provider<QrScannerSource>((ref) {
-  return QrScannerSource();
+/// Provides a [QrScannerSource] that manages the camera controller lifecycle.
+///
+/// Auto-disposes the controller when the provider is no longer watched,
+/// preventing camera resource leaks.
+final qrScannerSourceProvider =
+    Provider.autoDispose<QrScannerSource>((ref) {
+  final source = QrScannerSource();
+  ref.onDispose(() => source.dispose());
+  return source;
 });
 
 final scanAndJoinUseCaseProvider = Provider<ScanAndJoin>((ref) {

@@ -15,7 +15,6 @@ class WelcomePage extends StatelessWidget {
         child: Padding(
           padding: UIConstants.paddingXL,
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Spacer(flex: 2),
               Icon(
@@ -39,15 +38,34 @@ class WelcomePage extends StatelessWidget {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-              const Spacer(flex: 2),
-              Text(
-                'Scan a QR code to join a cluster',
-                style: theme.textTheme.bodyLarge?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-                textAlign: TextAlign.center,
+              const Spacer(),
+
+              // Onboarding step tracker
+              StepTracker(
+                steps: const [
+                  TrackerStep(
+                    label: 'Grant Permissions',
+                    description: 'Allow camera access for QR scanning',
+                    icon: Icons.shield_outlined,
+                    status: StepStatus.active,
+                  ),
+                  TrackerStep(
+                    label: 'Scan QR Code',
+                    description: 'Scan a cluster configuration QR code',
+                    icon: Icons.qr_code_scanner,
+                    status: StepStatus.pending,
+                  ),
+                  TrackerStep(
+                    label: 'Connected',
+                    description: 'Node joins the compute cluster',
+                    icon: Icons.check_circle_outline,
+                    status: StepStatus.pending,
+                  ),
+                ],
               ),
-              const SizedBox(height: UIConstants.spacingXL),
+
+              const Spacer(),
+
               SizedBox(
                 width: double.infinity,
                 height: UIConstants.buttonLG,
@@ -59,7 +77,7 @@ class WelcomePage extends StatelessWidget {
                   label: const Text('Scan QR Code'),
                 ),
               ),
-              const Spacer(),
+              const SizedBox(height: UIConstants.spacingLG),
             ],
           ),
         ),

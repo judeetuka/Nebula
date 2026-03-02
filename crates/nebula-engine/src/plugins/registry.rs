@@ -232,6 +232,7 @@ mod tests {
             abi: "x86_64".to_string(),
             entry_symbol: "nebula_plugin_init".to_string(),
             capabilities: vec![PluginCapability::Network],
+            depends_on: vec![],
         }
     }
 

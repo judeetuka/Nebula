@@ -13,11 +13,10 @@ class StatusPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final statusAsync = ref.watch(nodeStatusProvider);
-    final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Node Status'),
+      appBar: BlurredAppBar(
+        title: 'Node Status',
         centerTitle: true,
         actions: [
           IconButton(
@@ -28,83 +27,151 @@ class StatusPage extends ConsumerWidget {
         ],
       ),
       body: statusAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, stack) => Center(
-          child: Padding(
-            padding: UIConstants.paddingXL,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.error_outline,
-                  size: 48,
-                  color: theme.colorScheme.error,
-                ),
-                const SizedBox(height: UIConstants.spacingLG),
-                Text(
-                  'Failed to load node status',
-                  style: theme.textTheme.titleMedium,
-                ),
-                const SizedBox(height: UIConstants.spacingSM),
-                Text(
-                  error.toString(),
-                  style: theme.textTheme.bodySmall,
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: UIConstants.spacingXL),
-                FilledButton.icon(
-                  onPressed: () => ref.invalidate(nodeStatusProvider),
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Retry'),
-                ),
-              ],
-            ),
-          ),
-        ),
-        data: (status) => SingleChildScrollView(
+        loading: () => Padding(
           padding: UIConstants.paddingXL,
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Center(child: RoleBadge(state: status.state)),
-              const SizedBox(height: UIConstants.spacingXL),
-              ConnectionIndicator(isActive: status.isActive),
-              const SizedBox(height: UIConstants.spacingXL),
-              NodeMetricsCard(
-                nodeId: status.nodeId,
-                clusterId: status.clusterId,
-                state: status.state,
-                isConfigured: status.isConfigured,
+              const ProgressBar(progress: 1.0),
+              const SizedBox(height: UIConstants.spacingLG),
+              Text(
+                'Loading node status...',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
               ),
-              const SizedBox(height: UIConstants.spacingXXL),
-              if (status.isActive)
-                FilledButton.tonalIcon(
-                  onPressed: () => _shutdownEngine(ref),
-                  icon: const Icon(Icons.stop_circle_outlined),
-                  label: const Text('Shutdown Engine'),
-                )
-              else if (status.isConfigured)
-                FilledButton.icon(
-                  onPressed: () => _startEngine(ref),
-                  icon: const Icon(Icons.play_arrow),
-                  label: const Text('Start Engine'),
-                ),
             ],
           ),
+        ),
+        error: (error, stack) => _buildErrorView(context, ref, error),
+        data: (status) => _buildStatusView(context, ref, status),
+      ),
+    );
+  }
+
+  Widget _buildErrorView(
+    BuildContext context,
+    WidgetRef ref,
+    Object error,
+  ) {
+    final theme = Theme.of(context);
+
+    // Show toast on first render of error state.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      NotificationToast.error(context, 'Failed to load node status');
+    });
+
+    return Center(
+      child: Padding(
+        padding: UIConstants.paddingXL,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.error_outline,
+              size: 48,
+              color: theme.colorScheme.error,
+            ),
+            const SizedBox(height: UIConstants.spacingLG),
+            Text(
+              'Failed to load node status',
+              style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: UIConstants.spacingSM),
+            Text(
+              error.toString(),
+              style: theme.textTheme.bodySmall,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: UIConstants.spacingXL),
+            FilledButton.icon(
+              onPressed: () => ref.invalidate(nodeStatusProvider),
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Future<void> _shutdownEngine(WidgetRef ref) async {
+  Widget _buildStatusView(
+    BuildContext context,
+    WidgetRef ref,
+    dynamic status,
+  ) {
+    return SingleChildScrollView(
+      padding: UIConstants.paddingXL,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(child: RoleBadge(state: status.state)),
+          const SizedBox(height: UIConstants.spacingXL),
+          ConnectionIndicator(isActive: status.isActive),
+          const SizedBox(height: UIConstants.spacingXL),
+          NodeMetricsCard(
+            nodeId: status.nodeId,
+            clusterId: status.clusterId,
+            state: status.state,
+            isConfigured: status.isConfigured,
+          ),
+          const SizedBox(height: UIConstants.spacingXL),
+
+          // Action tiles
+          if (status.isActive) ...[
+            ActionTile(
+              icon: Icons.stop_circle_outlined,
+              title: 'Shutdown Engine',
+              isDestructive: true,
+              onTap: () => _confirmShutdown(context, ref),
+            ),
+          ] else if (status.isConfigured) ...[
+            ActionTile(
+              icon: Icons.play_arrow,
+              title: 'Start Engine',
+              onTap: () => _startEngine(context, ref),
+            ),
+          ],
+
+          ActionTile(
+            icon: Icons.refresh,
+            title: 'Refresh Status',
+            onTap: () => ref.invalidate(nodeStatusProvider),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmShutdown(BuildContext context, WidgetRef ref) {
+    AppAlertDialog.showDanger(
+      context: context,
+      title: 'Shutdown Engine?',
+      message:
+          'This will disconnect the node from the cluster. '
+          'You can restart it later.',
+      actionText: 'Shutdown',
+      onActionPressed: () => _shutdownEngine(context, ref),
+    );
+  }
+
+  Future<void> _shutdownEngine(BuildContext context, WidgetRef ref) async {
     final repository = ref.read(engineRepositoryProvider);
     await repository.shutdownEngine();
     ref.invalidate(nodeStatusProvider);
+
+    if (context.mounted) {
+      NotificationToast.info(context, 'Engine shut down');
+    }
   }
 
-  Future<void> _startEngine(WidgetRef ref) async {
+  Future<void> _startEngine(BuildContext context, WidgetRef ref) async {
     final repository = ref.read(engineRepositoryProvider);
     await repository.startEngine();
     ref.invalidate(nodeStatusProvider);
+
+    if (context.mounted) {
+      NotificationToast.success(context, 'Engine started');
+    }
   }
 }

@@ -1,6 +1,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use super::ipc::{InvokeRouter, InvokeTarget};
+
+// Re-export PluginContext from the SDK crate.
+pub use nebula_plugin_sdk::context::PluginContext;
+
 /// Host-side data associated with a loaded plugin.
 ///
 /// A `Box<HostData>` is allocated for each plugin and passed to the plugin
@@ -13,154 +18,6 @@ pub struct HostData {
     /// survives hot-reloads.
     pub state_store: Arc<RwLock<HashMap<String, Vec<u8>>>>,
 }
-
-/// The context structure passed to plugins via `nebula_plugin_init`.
-///
-/// Plugins call back into the host through the function pointers in this
-/// struct. The `host_data` pointer is an opaque handle that must be passed
-/// as the first argument to every callback — it lets the host identify the
-/// calling plugin and route the request to the correct internal state.
-///
-/// # ABI stability
-///
-/// This struct is `#[repr(C)]` so that its layout is predictable across
-/// compiler versions. All function pointer signatures use only C-compatible
-/// types (raw pointers, `usize`, `u8`, `i32`).
-///
-/// # Safety contract
-///
-/// * The host guarantees that `host_data` remains valid for the lifetime of
-///   the plugin (from init to shutdown).
-/// * Plugins must not free or mutate `host_data`.
-/// * Pointer/length pairs (`key_ptr`/`key_len`, etc.) must point to valid
-///   memory for the stated length. The host validates them defensively.
-#[repr(C)]
-pub struct PluginContext {
-    /// Opaque pointer to host-managed data for this plugin.
-    pub host_data: *mut std::ffi::c_void,
-
-    // -- State management ---------------------------------------------------
-    /// Read a value from the plugin's key-value store.
-    /// Returns the number of bytes written to `val_buf`, or -1 on error,
-    /// or -2 if the key was not found.
-    pub get_state: extern "C" fn(
-        host: *mut std::ffi::c_void,
-        key_ptr: *const u8,
-        key_len: usize,
-        val_buf: *mut u8,
-        val_buf_len: usize,
-    ) -> i32,
-
-    /// Write a value into the plugin's key-value store.
-    /// Returns 0 on success, -1 on error.
-    pub set_state: extern "C" fn(
-        host: *mut std::ffi::c_void,
-        key_ptr: *const u8,
-        key_len: usize,
-        val_ptr: *const u8,
-        val_len: usize,
-    ) -> i32,
-
-    /// Remove a key from the plugin's key-value store.
-    /// Returns 0 on success (even if the key did not exist), -1 on error.
-    pub delete_state: extern "C" fn(
-        host: *mut std::ffi::c_void,
-        key_ptr: *const u8,
-        key_len: usize,
-    ) -> i32,
-
-    // -- Logging ------------------------------------------------------------
-    /// Emit a log message. `level` follows tracing conventions:
-    /// 1 = error, 2 = warn, 3 = info, 4 = debug, 5 = trace.
-    /// Returns 0 on success, -1 on error.
-    pub log: extern "C" fn(
-        host: *mut std::ffi::c_void,
-        level: u8,
-        msg_ptr: *const u8,
-        msg_len: usize,
-    ) -> i32,
-
-    // -- MQTT messaging -----------------------------------------------------
-    /// Publish a message to an MQTT topic.
-    /// Returns 0 on success, -1 on error (stub: always returns -1 for now).
-    pub publish: extern "C" fn(
-        host: *mut std::ffi::c_void,
-        topic_ptr: *const u8,
-        topic_len: usize,
-        payload_ptr: *const u8,
-        payload_len: usize,
-    ) -> i32,
-
-    /// Subscribe to an MQTT topic.
-    /// Returns 0 on success, -1 on error (stub: always returns -1 for now).
-    pub subscribe: extern "C" fn(
-        host: *mut std::ffi::c_void,
-        topic_ptr: *const u8,
-        topic_len: usize,
-    ) -> i32,
-
-    // -- Task management ----------------------------------------------------
-    /// Report incremental progress on a task (0-100).
-    /// Returns 0 on success, -1 on error (stub).
-    pub report_task_progress: extern "C" fn(
-        host: *mut std::ffi::c_void,
-        task_id_ptr: *const u8,
-        task_id_len: usize,
-        progress: u8,
-    ) -> i32,
-
-    /// Report that a task completed successfully.
-    /// Returns 0 on success, -1 on error (stub).
-    pub report_task_complete: extern "C" fn(
-        host: *mut std::ffi::c_void,
-        task_id_ptr: *const u8,
-        task_id_len: usize,
-        result_ptr: *const u8,
-        result_len: usize,
-    ) -> i32,
-
-    /// Report that a task failed.
-    /// Returns 0 on success, -1 on error (stub).
-    pub report_task_failed: extern "C" fn(
-        host: *mut std::ffi::c_void,
-        task_id_ptr: *const u8,
-        task_id_len: usize,
-        error_ptr: *const u8,
-        error_len: usize,
-    ) -> i32,
-
-    // -- Platform capabilities ----------------------------------------------
-    /// Invoke a platform-specific capability (Android API bridge).
-    /// Returns bytes written to `result_buf`, or -1 if not implemented.
-    pub platform_invoke: extern "C" fn(
-        host: *mut std::ffi::c_void,
-        capability_ptr: *const u8,
-        capability_len: usize,
-        method_ptr: *const u8,
-        method_len: usize,
-        args_ptr: *const u8,
-        args_len: usize,
-        result_buf: *mut u8,
-        result_buf_len: usize,
-    ) -> i32,
-}
-
-// SAFETY: `PluginContext` contains a `*mut c_void` that points to a
-// heap-allocated `HostData`. This pointer is:
-//   1. Created from `Box::into_raw` in `create_plugin_context`.
-//   2. Only dereferenced through the `extern "C"` callback functions.
-//   3. The underlying `HostData` synchronizes mutable access to the state
-//      store via `Arc<RwLock<HashMap>>`, which is itself `Send + Sync`.
-//   4. The pointer is only freed in `drop_host_data` after the plugin has
-//      been shut down, so no concurrent access occurs during deallocation.
-//
-// The function pointer fields are all `extern "C" fn(...)` which are `Copy`,
-// `Send`, and `Sync` by nature (they are plain function pointers).
-//
-// Therefore it is safe to send a `PluginContext` across threads and share
-// references to it, provided the `host_data` lifetime contract is upheld.
-unsafe impl Send for PluginContext {}
-unsafe impl Sync for PluginContext {}
 
 // ---------------------------------------------------------------------------
 // extern "C" callback implementations
@@ -383,19 +240,115 @@ extern "C" fn cb_report_task_failed(
     -1
 }
 
+/// Platform invoke callback -- routes capability strings to Android JNI,
+/// inter-plugin calls, or engine commands.
+///
+/// # Routing
+///
+/// The `capability` string is parsed by [`InvokeRouter::parse_target`]:
+/// - `"android:telephony:sendSms"` routes to the Kotlin `NebulaPlatformBridge`
+///    via the JNI bridge in `crate::platform::android`.
+/// - `"plugin:classifier:classify"` routes to another plugin (not yet wired).
+/// - `"engine:device_info"` routes to an engine command (not yet wired).
+///
+/// # Return Value
+///
+/// On success, returns the number of bytes written to `result_buf`.
+/// On failure, returns `-1`.
 extern "C" fn cb_platform_invoke(
     _host: *mut std::ffi::c_void,
-    _capability_ptr: *const u8,
-    _capability_len: usize,
-    _method_ptr: *const u8,
-    _method_len: usize,
-    _args_ptr: *const u8,
-    _args_len: usize,
-    _result_buf: *mut u8,
-    _result_buf_len: usize,
+    capability_ptr: *const u8,
+    capability_len: usize,
+    method_ptr: *const u8,
+    method_len: usize,
+    args_ptr: *const u8,
+    args_len: usize,
+    result_buf: *mut u8,
+    result_buf_len: usize,
 ) -> i32 {
-    // Stub: platform invoke (Android API bridge) is not implemented yet.
-    -1
+    // SAFETY: `capability_ptr`, `method_ptr`, and `args_ptr` are provided by
+    // the plugin and must be valid for their stated lengths. They originate
+    // from the plugin's address space and remain valid for the duration of
+    // this synchronous call.
+    let capability_bytes = match unsafe { slice_from_raw(capability_ptr, capability_len) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let method_bytes = match unsafe { slice_from_raw(method_ptr, method_len) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let args_bytes = match unsafe { slice_from_raw(args_ptr, args_len) } {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    let capability = match std::str::from_utf8(capability_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let method = match std::str::from_utf8(method_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let args = match std::str::from_utf8(args_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    let target = InvokeRouter::parse_target(capability);
+
+    let result = match target {
+        InvokeTarget::Android { service, method: _ } => {
+            // The `method` field from `InvokeTarget::Android` is the Kotlin
+            // method name extracted from the capability string. However, the
+            // plugin also passes a separate `method` parameter. We use the
+            // one from the capability string because it was validated by the
+            // permission system in `InvokeRouter`.
+            //
+            // Example: capability = "android:telephony:sendSms"
+            //   -> service = "telephony", method from target = "sendSms"
+            //   -> The plugin's `method` param is ignored in favour of the
+            //      capability-embedded method name.
+            let android_method = match InvokeRouter::parse_target(capability) {
+                InvokeTarget::Android { method: m, .. } => m,
+                _ => return -1,
+            };
+            crate::platform::invoke_android(&service, &android_method, args)
+        }
+        InvokeTarget::Plugin {
+            plugin_id: _,
+            action: _,
+        } => {
+            // Stub: inter-plugin calls will be wired in a future phase.
+            let _ = method;
+            Err("Plugin-to-plugin invocation not yet implemented".to_string())
+        }
+        InvokeTarget::Engine { command: _ } => {
+            // Stub: engine commands will be wired in a future phase.
+            let _ = method;
+            Err("Engine command invocation not yet implemented".to_string())
+        }
+        InvokeTarget::Unknown => {
+            Err(format!("Unknown invoke target: {capability}"))
+        }
+    };
+
+    match result {
+        Ok(response) => {
+            let bytes = response.as_bytes();
+            let copy_len = bytes.len().min(result_buf_len);
+            if !result_buf.is_null() && copy_len > 0 {
+                // SAFETY: `result_buf` is provided by the plugin and must
+                // be valid for `result_buf_len` bytes.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), result_buf, copy_len);
+                }
+            }
+            copy_len as i32
+        }
+        Err(_) => -1,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -709,12 +662,95 @@ mod tests {
     }
 
     #[test]
-    fn test_platform_invoke_stub_returns_negative() {
+    fn test_platform_invoke_returns_negative_for_android_on_non_android() {
+        // On non-Android platforms, invoking an android: capability should
+        // return -1 because the JNI bridge is unavailable.
         let store = make_state_store();
         let ctx = create_plugin_context("test-plugin", store);
 
-        let cap = b"sms";
-        let method = b"send";
+        let cap = b"android:device:getDeviceInfo";
+        let method = b"getDeviceInfo";
+        let args = b"{}";
+        let mut result_buf = [0u8; 256];
+        let result = (ctx.platform_invoke)(
+            ctx.host_data,
+            cap.as_ptr(),
+            cap.len(),
+            method.as_ptr(),
+            method.len(),
+            args.as_ptr(),
+            args.len(),
+            result_buf.as_mut_ptr(),
+            result_buf.len(),
+        );
+        assert_eq!(result, -1);
+
+        let mut ctx = ctx;
+        // SAFETY: cleanup.
+        unsafe { drop_host_data(&mut ctx) };
+    }
+
+    #[test]
+    fn test_platform_invoke_returns_negative_for_unknown_capability() {
+        let store = make_state_store();
+        let ctx = create_plugin_context("test-plugin", store);
+
+        let cap = b"bogus:something";
+        let method = b"do_thing";
+        let args = b"{}";
+        let mut result_buf = [0u8; 64];
+        let result = (ctx.platform_invoke)(
+            ctx.host_data,
+            cap.as_ptr(),
+            cap.len(),
+            method.as_ptr(),
+            method.len(),
+            args.as_ptr(),
+            args.len(),
+            result_buf.as_mut_ptr(),
+            result_buf.len(),
+        );
+        assert_eq!(result, -1);
+
+        let mut ctx = ctx;
+        // SAFETY: cleanup.
+        unsafe { drop_host_data(&mut ctx) };
+    }
+
+    #[test]
+    fn test_platform_invoke_returns_negative_for_plugin_target() {
+        let store = make_state_store();
+        let ctx = create_plugin_context("test-plugin", store);
+
+        let cap = b"plugin:classifier:classify";
+        let method = b"classify";
+        let args = b"{}";
+        let mut result_buf = [0u8; 64];
+        let result = (ctx.platform_invoke)(
+            ctx.host_data,
+            cap.as_ptr(),
+            cap.len(),
+            method.as_ptr(),
+            method.len(),
+            args.as_ptr(),
+            args.len(),
+            result_buf.as_mut_ptr(),
+            result_buf.len(),
+        );
+        assert_eq!(result, -1);
+
+        let mut ctx = ctx;
+        // SAFETY: cleanup.
+        unsafe { drop_host_data(&mut ctx) };
+    }
+
+    #[test]
+    fn test_platform_invoke_returns_negative_for_engine_target() {
+        let store = make_state_store();
+        let ctx = create_plugin_context("test-plugin", store);
+
+        let cap = b"engine:device_info";
+        let method = b"device_info";
         let args = b"{}";
         let mut result_buf = [0u8; 64];
         let result = (ctx.platform_invoke)(

@@ -1,14 +1,29 @@
-/// Data source for QR code scanning.
+import 'package:mobile_scanner/mobile_scanner.dart';
+
+/// Data source managing the camera controller for QR code scanning.
 ///
-/// Currently a stub. The real camera-based scanner using mobile_scanner
-/// will be integrated in a future phase.
+/// The actual QR detection happens in the UI via the [MobileScanner] widget.
+/// This source owns the [MobileScannerController] lifecycle.
 class QrScannerSource {
-  /// Simulates scanning a QR code and returning its raw string content.
-  ///
-  /// In production, this will open the device camera and decode a QR code.
-  Future<String> scanQrCode() async {
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-    // Stub: return a sample QR payload JSON.
-    return '{"version":1,"cluster_id":"cluster-demo-001","server_url":"https://nebula.example.com","auth_token":"stub-token-abc123"}';
+  MobileScannerController? _controller;
+
+  /// Returns the active scanner controller, creating one if needed.
+  MobileScannerController get controller {
+    _controller ??= MobileScannerController(
+      detectionSpeed: DetectionSpeed.normal,
+      facing: CameraFacing.back,
+    );
+    return _controller!;
+  }
+
+  /// Toggles the device torch on/off.
+  Future<void> toggleTorch() async {
+    await controller.toggleTorch();
+  }
+
+  /// Disposes the camera controller and releases resources.
+  void dispose() {
+    _controller?.dispose();
+    _controller = null;
   }
 }

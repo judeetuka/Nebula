@@ -1,13 +1,15 @@
 use std::collections::HashMap;
+use std::io::Write;
+use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-/// Client for the plugin store — handles ABI-aware downloads and verification.
+/// Client for the plugin store -- handles ABI-aware downloads and verification.
 ///
-/// In the current phase this is mostly a stub: actual HTTP downloads and
-/// checksum verification will be implemented once the server-side plugin
-/// store is built. The ABI-matching logic is fully functional.
+/// Downloads plugin `.so` binaries from the plugin store API and verifies
+/// their SHA-256 checksums before loading.
 pub struct PluginStoreClient {
     /// Base URL of the plugin store API.
     store_url: String,
@@ -53,22 +55,52 @@ impl PluginStoreClient {
 
     /// Download a plugin binary from `url` and save it to `dest_path`.
     ///
-    /// **Stub**: always returns `Ok(())`. Actual HTTP download will be
-    /// implemented in a future phase.
-    pub fn download_plugin(&self, _url: &str, _dest_path: &str) -> Result<()> {
-        // Stub: real HTTP download will be implemented when the plugin
-        // store server is ready.
+    /// Uses `reqwest` to perform an HTTP GET request, streaming the response
+    /// body to a file. Creates parent directories if they do not exist.
+    pub async fn download_plugin(&self, url: &str, dest_path: &str) -> Result<()> {
+        let dest = Path::new(dest_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+        }
+
+        let response = reqwest::get(url)
+            .await
+            .with_context(|| format!("HTTP request failed for {url}"))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            anyhow::bail!("Download failed with status {status} for {url}");
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .with_context(|| format!("Failed to read response body from {url}"))?;
+
+        let mut file = std::fs::File::create(dest)
+            .with_context(|| format!("Failed to create file: {dest_path}"))?;
+
+        file.write_all(&bytes)
+            .with_context(|| format!("Failed to write to file: {dest_path}"))?;
+
         Ok(())
     }
 
     /// Verify that the file at `path` matches the expected SHA-256 checksum.
     ///
-    /// **Stub**: always returns `Ok(true)`. Real verification will use
-    /// `sha2` to hash the file contents.
-    pub fn verify_checksum(&self, _path: &str, _expected: &str) -> Result<bool> {
-        // Stub: real checksum verification will be implemented alongside
-        // the download logic.
-        Ok(true)
+    /// Reads the file contents, computes the SHA-256 hash, and compares the
+    /// hex-encoded digest against the expected value (case-insensitive).
+    pub fn verify_checksum(&self, path: &str, expected: &str) -> Result<bool> {
+        let data = std::fs::read(path)
+            .with_context(|| format!("Failed to read file for checksum: {path}"))?;
+
+        let mut hasher = Sha256::new();
+        hasher.update(&data);
+        let digest = hasher.finalize();
+        let hex_digest = hex::encode(digest);
+
+        Ok(hex_digest.eq_ignore_ascii_case(expected))
     }
 
     /// Returns the local device's ABI string.
@@ -193,22 +225,104 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Stubs
+    // SHA-256 checksum verification
     // -------------------------------------------------------------------
 
     #[test]
-    fn test_download_plugin_stub_succeeds() {
-        let client = PluginStoreClient::new("https://store.nebula.io", "aarch64", "/data/plugins");
-        let result = client.download_plugin("https://example.com/plugin.so", "/tmp/plugin.so");
+    fn test_verify_checksum_correct_hash() {
+        let dir = std::env::temp_dir()
+            .join("nebula_plugin_tests")
+            .join("checksum_correct")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test_plugin.so");
+
+        let content = b"hello world plugin binary";
+        std::fs::write(&path, content).unwrap();
+
+        // Compute expected SHA-256 of the content
+        let mut hasher = Sha256::new();
+        hasher.update(content);
+        let expected = hex::encode(hasher.finalize());
+
+        let client = PluginStoreClient::new("https://store.nebula.io", "aarch64", dir.to_str().unwrap());
+        let result = client.verify_checksum(path.to_str().unwrap(), &expected);
         assert!(result.is_ok());
+        assert!(result.unwrap());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn test_verify_checksum_stub_returns_true() {
-        let client = PluginStoreClient::new("https://store.nebula.io", "aarch64", "/data/plugins");
-        let result = client.verify_checksum("/tmp/plugin.so", "abc123");
+    fn test_verify_checksum_wrong_hash() {
+        let dir = std::env::temp_dir()
+            .join("nebula_plugin_tests")
+            .join("checksum_wrong")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test_plugin.so");
+
+        std::fs::write(&path, b"some binary content").unwrap();
+
+        let client = PluginStoreClient::new("https://store.nebula.io", "aarch64", dir.to_str().unwrap());
+        let result = client.verify_checksum(path.to_str().unwrap(), "0000000000000000000000000000000000000000000000000000000000000000");
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_verify_checksum_case_insensitive() {
+        let dir = std::env::temp_dir()
+            .join("nebula_plugin_tests")
+            .join("checksum_case")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test_plugin.so");
+
+        let content = b"case test data";
+        std::fs::write(&path, content).unwrap();
+
+        let mut hasher = Sha256::new();
+        hasher.update(content);
+        let expected_upper = hex::encode(hasher.finalize()).to_uppercase();
+
+        let client = PluginStoreClient::new("https://store.nebula.io", "aarch64", dir.to_str().unwrap());
+        let result = client.verify_checksum(path.to_str().unwrap(), &expected_upper);
         assert!(result.is_ok());
         assert!(result.unwrap());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_verify_checksum_missing_file() {
+        let client = PluginStoreClient::new("https://store.nebula.io", "aarch64", "/tmp");
+        let result = client.verify_checksum("/nonexistent/path/to/file.so", "abc");
+        assert!(result.is_err());
+    }
+
+    // -------------------------------------------------------------------
+    // Download (async) -- validates error on unreachable URL
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_download_plugin_unreachable_url() {
+        let dir = std::env::temp_dir()
+            .join("nebula_plugin_tests")
+            .join("download_fail")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("plugin.so");
+
+        let client = PluginStoreClient::new("https://store.nebula.io", "aarch64", dir.to_str().unwrap());
+        let result = client
+            .download_plugin("http://127.0.0.1:1/nonexistent.so", dest.to_str().unwrap())
+            .await;
+        assert!(result.is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // -------------------------------------------------------------------

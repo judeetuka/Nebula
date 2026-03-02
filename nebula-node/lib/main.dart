@@ -4,9 +4,11 @@ import 'package:nebula_ui/nebula_ui.dart';
 
 import 'config/router.dart';
 import 'features/engine/presentation/providers/engine_provider.dart';
+import 'src/rust/frb_generated.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await RustLib.init();
   runApp(const ProviderScope(child: NebulaNodeApp()));
 }
 
