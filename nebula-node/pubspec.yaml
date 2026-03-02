@@ -1,0 +1,26 @@
+name: nebula_node
+description: "NEBULA Node — Android compute node software"
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  flutter_riverpod: ^2.5.1
+  rust_lib_nebula:
+    path: rust_builder
+  flutter_rust_bridge: 2.11.1
+  nebula_ui:
+    path: ../shared/nebula_ui
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

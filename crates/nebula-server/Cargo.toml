@@ -1,0 +1,47 @@
+[package]
+name = "nebula-server"
+edition.workspace = true
+version.workspace = true
+description = "NEBULA multi-tenant reverse proxy server (rathole fork)"
+
+[[bin]]
+name = "nebula-server"
+path = "src/main.rs"
+
+[dependencies]
+nebula-core = { path = "../nebula-core" }
+
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rand.workspace = true
+bytes.workspace = true
+hex.workspace = true
+sha2.workspace = true
+async-trait.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+# From rathole
+bincode = "1"
+backoff = { version = "0.4", features = ["tokio"] }
+lazy_static = "1.4"
+socket2 = { version = "0.4", features = ["all"] }
+fdlimit = "0.2"
+toml = "0.5"
+clap = { version = "3.0", features = ["derive"] }
+url = { version = "2", features = ["serde"] }
+
+# REST API
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Auth
+jsonwebtoken = "9"
+
+# Config hot-reload
+notify = "5.0.0-pre.13"

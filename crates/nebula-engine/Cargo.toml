@@ -1,0 +1,26 @@
+[package]
+name = "nebula-engine"
+edition.workspace = true
+version.workspace = true
+description = "NEBULA node engine — Rust core for Flutter FFI"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[dependencies]
+nebula-core = { path = "../nebula-core" }
+
+flutter_rust_bridge = "=2.11.1"
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+rumqttd = "0.19"
+rumqttc = "0.24"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
