@@ -10,3 +10,7 @@ class EngineFailure extends Failure {
 class ScanFailure extends Failure {
   const ScanFailure(super.message);
 }
+
+class BrowserFailure extends Failure {
+  const BrowserFailure(super.message);
+}

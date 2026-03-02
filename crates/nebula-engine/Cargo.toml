@@ -21,6 +21,7 @@ chrono.workspace = true
 
 rumqttd = "0.19"
 rumqttc = "0.24"
+libloading = "0.8"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

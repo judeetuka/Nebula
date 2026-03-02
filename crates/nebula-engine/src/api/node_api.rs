@@ -2,6 +2,7 @@ use flutter_rust_bridge::frb;
 use std::sync::{OnceLock, RwLock};
 
 use crate::cluster::hierarchy::HierarchyManager;
+use crate::routing::table::RouteMethod;
 use crate::runtime::engine::NebulaEngine;
 
 /// Global engine singleton.
@@ -202,6 +203,55 @@ pub fn get_cluster_topology() -> Result<String, String> {
 
         serde_json::to_string(&json)
             .map_err(|e| format!("Failed to serialize topology: {}", e))
+    })
+}
+
+/// Get the current routing table as a JSON string.
+///
+/// Returns a JSON object mapping node IDs to their best route:
+/// - `routes`: array of objects, each containing:
+///   - `target`: the target node ID
+///   - `method`: "LanDirect", "HolePunch", or "TunnelRelay"
+///   - `addr`: the address (for LanDirect and HolePunch; null for TunnelRelay)
+///
+/// Returns an empty routes array if the router is not initialized (engine
+/// not configured).
+#[frb(sync)]
+pub fn get_routing_table() -> Result<String, String> {
+    with_engine(|engine| {
+        let router_lock = engine
+            .smart_router()
+            .read()
+            .map_err(|e| format!("Router lock poisoned: {}", e))?;
+
+        let routes: Vec<serde_json::Value> = match router_lock.as_ref() {
+            Some(router) => router
+                .routing_summary()
+                .iter()
+                .map(|(target, method)| {
+                    let (method_name, addr) = match method {
+                        RouteMethod::LanDirect { addr } => {
+                            ("LanDirect", Some(addr.to_string()))
+                        }
+                        RouteMethod::HolePunch { addr } => {
+                            ("HolePunch", Some(addr.to_string()))
+                        }
+                        RouteMethod::TunnelRelay => ("TunnelRelay", None),
+                    };
+
+                    serde_json::json!({
+                        "target": target.to_string(),
+                        "method": method_name,
+                        "addr": addr,
+                    })
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+
+        let json = serde_json::json!({ "routes": routes });
+        serde_json::to_string(&json)
+            .map_err(|e| format!("Failed to serialize routing table: {}", e))
     })
 }
 

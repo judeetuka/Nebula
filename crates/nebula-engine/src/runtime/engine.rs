@@ -10,13 +10,27 @@ use crate::cluster::membership::ClusterMembership;
 use crate::identity::local_identity::LocalIdentity;
 use crate::mqtt::broker::EmbeddedBroker;
 use crate::mqtt::client::MqttClient;
+use crate::plugins::registry::PluginRegistry;
+use crate::routing::smart_router::SmartRouter;
 use crate::runtime::state::NodeState;
+use crate::tasks::dispatcher::TaskDispatcher;
+use crate::tasks::executor::TaskExecutor;
+
+/// Default maximum pending tasks in the dispatcher queue.
+const DEFAULT_MAX_PENDING: usize = 1000;
+
+/// Default maximum concurrent tasks on a worker executor.
+const DEFAULT_MAX_CONCURRENT: usize = 5;
+
+/// Default plugin directory name (relative to the storage path).
+const DEFAULT_PLUGIN_DIR: &str = "plugins";
 
 /// The NEBULA node engine.
 ///
 /// Manages the node lifecycle: identity persistence, cluster configuration,
-/// state transitions, shutdown signaling, MQTT infrastructure, and cluster
-/// membership tracking.
+/// state transitions, shutdown signaling, MQTT infrastructure, cluster
+/// membership tracking, smart routing, task dispatch/execution, and the
+/// plugin registry.
 pub struct NebulaEngine {
     state: Arc<RwLock<NodeState>>,
     identity: LocalIdentity,
@@ -24,6 +38,10 @@ pub struct NebulaEngine {
     mqtt_broker: Arc<TokioMutex<Option<EmbeddedBroker>>>,
     mqtt_client: Arc<TokioMutex<Option<MqttClient>>>,
     membership: Arc<StdRwLock<ClusterMembership>>,
+    smart_router: Arc<StdRwLock<Option<SmartRouter>>>,
+    task_dispatcher: Arc<StdRwLock<TaskDispatcher>>,
+    task_executor: Arc<StdRwLock<TaskExecutor>>,
+    plugin_registry: Arc<StdRwLock<PluginRegistry>>,
 }
 
 impl NebulaEngine {
@@ -48,6 +66,21 @@ impl NebulaEngine {
         let node_id = identity.node_id();
         let membership = ClusterMembership::new(node_id, NodeRole::Worker);
 
+        // Initialize smart router if cluster is already configured
+        let smart_router = if identity.is_configured() {
+            let cluster_id = identity.cluster_id().unwrap_or_default();
+            let server_url = identity.server_url().unwrap_or_default();
+            Some(SmartRouter::new(cluster_id, node_id, 0, server_url))
+        } else {
+            None
+        };
+
+        let task_dispatcher = TaskDispatcher::new(DEFAULT_MAX_PENDING);
+        let task_executor = TaskExecutor::new(node_id, DEFAULT_MAX_CONCURRENT);
+
+        let plugin_dir = format!("{}/{}", storage_path, DEFAULT_PLUGIN_DIR);
+        let plugin_registry = PluginRegistry::new(&plugin_dir);
+
         Ok(Self {
             state: Arc::new(RwLock::new(initial_state)),
             identity,
@@ -55,13 +88,18 @@ impl NebulaEngine {
             mqtt_broker: Arc::new(TokioMutex::new(None)),
             mqtt_client: Arc::new(TokioMutex::new(None)),
             membership: Arc::new(StdRwLock::new(membership)),
+            smart_router: Arc::new(StdRwLock::new(smart_router)),
+            task_dispatcher: Arc::new(StdRwLock::new(task_dispatcher)),
+            task_executor: Arc::new(StdRwLock::new(task_executor)),
+            plugin_registry: Arc::new(StdRwLock::new(plugin_registry)),
         })
     }
 
     /// Configure the engine with cluster connection details.
     ///
     /// Persists the configuration to disk and transitions the state to
-    /// `Configured`. Only valid from `Uninitialized` state.
+    /// `Configured`. Only valid from `Uninitialized` state. Also initializes
+    /// the smart router for the configured cluster.
     pub fn configure(
         &mut self,
         cluster_id: &str,
@@ -77,6 +115,11 @@ impl NebulaEngine {
         self.identity
             .configure_cluster(cluster_id, server_url, auth_token)
             .with_context(|| "Failed to persist cluster configuration")?;
+
+        // Initialize the smart router now that we have cluster info
+        let node_id = self.identity.node_id();
+        let router = SmartRouter::new(cluster_id, node_id, 0, server_url);
+        *self.smart_router.write().unwrap() = Some(router);
 
         Ok(())
     }
@@ -149,6 +192,29 @@ impl NebulaEngine {
     /// Returns a reference to the MQTT client handle.
     pub fn mqtt_client(&self) -> &Arc<TokioMutex<Option<MqttClient>>> {
         &self.mqtt_client
+    }
+
+    /// Returns a reference to the smart router handle.
+    ///
+    /// The smart router is `None` until the engine is configured with
+    /// cluster details.
+    pub fn smart_router(&self) -> &Arc<StdRwLock<Option<SmartRouter>>> {
+        &self.smart_router
+    }
+
+    /// Returns a reference to the task dispatcher (master-side).
+    pub fn task_dispatcher(&self) -> &Arc<StdRwLock<TaskDispatcher>> {
+        &self.task_dispatcher
+    }
+
+    /// Returns a reference to the task executor (worker-side).
+    pub fn task_executor(&self) -> &Arc<StdRwLock<TaskExecutor>> {
+        &self.task_executor
+    }
+
+    /// Returns a reference to the plugin registry.
+    pub fn plugin_registry(&self) -> &Arc<StdRwLock<PluginRegistry>> {
+        &self.plugin_registry
     }
 
     /// Validate and apply a state transition.
@@ -399,6 +465,97 @@ mod tests {
 
         let client = engine.mqtt_client().blocking_lock();
         assert!(client.is_none());
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_engine_smart_router_none_before_configure() {
+        let dir = temp_test_dir("router_none");
+        let engine = NebulaEngine::new(dir.to_str().unwrap()).unwrap();
+
+        let router = engine.smart_router().read().unwrap();
+        assert!(router.is_none());
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_engine_smart_router_initialized_after_configure() {
+        let dir = temp_test_dir("router_after_config");
+        let mut engine = NebulaEngine::new(dir.to_str().unwrap()).unwrap();
+
+        engine
+            .configure("cluster-1", "wss://proxy.test", "token")
+            .unwrap();
+
+        let router = engine.smart_router().read().unwrap();
+        assert!(router.is_some());
+
+        let router = router.as_ref().unwrap();
+        assert_eq!(router.lan_discovery().cluster_id(), "cluster-1");
+        assert_eq!(router.tunnel_relay().server_url(), "wss://proxy.test");
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_engine_smart_router_restored_on_reload() {
+        let dir = temp_test_dir("router_reload");
+
+        let mut engine = NebulaEngine::new(dir.to_str().unwrap()).unwrap();
+        engine
+            .configure("cluster-99", "wss://server.test", "tok")
+            .unwrap();
+        drop(engine);
+
+        // Reload: since identity is configured, router should be initialized
+        let engine2 = NebulaEngine::new(dir.to_str().unwrap()).unwrap();
+        let router = engine2.smart_router().read().unwrap();
+        assert!(router.is_some());
+
+        let router = router.as_ref().unwrap();
+        assert_eq!(router.lan_discovery().cluster_id(), "cluster-99");
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_engine_has_task_dispatcher() {
+        let dir = temp_test_dir("has_dispatcher");
+        let engine = NebulaEngine::new(dir.to_str().unwrap()).unwrap();
+
+        let dispatcher = engine.task_dispatcher().read().unwrap();
+        assert_eq!(dispatcher.pending_count(), 0);
+        assert_eq!(dispatcher.dispatched_count(), 0);
+        assert_eq!(dispatcher.completed_count(), 0);
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_engine_has_task_executor() {
+        let dir = temp_test_dir("has_executor");
+        let engine = NebulaEngine::new(dir.to_str().unwrap()).unwrap();
+
+        let executor = engine.task_executor().read().unwrap();
+        assert_eq!(executor.active_count(), 0);
+        assert!(executor.can_accept_task());
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_engine_has_plugin_registry() {
+        let dir = temp_test_dir("has_plugins");
+        let engine = NebulaEngine::new(dir.to_str().unwrap()).unwrap();
+
+        let registry = engine.plugin_registry().read().unwrap();
+        assert_eq!(registry.plugin_count(), 0);
+        assert!(registry.list_plugins().is_empty());
+
+        let expected_dir = format!("{}/{}", dir.to_str().unwrap(), DEFAULT_PLUGIN_DIR);
+        assert_eq!(registry.plugin_dir(), expected_dir);
 
         cleanup(&dir);
     }

@@ -16,6 +16,8 @@ dependencies:
   flutter_rust_bridge: 2.11.1
   nebula_ui:
     path: ../shared/nebula_ui
+  webview_flutter: ^4.13.0
+  shared_preferences: ^2.3.4
 
 dev_dependencies:
   flutter_test:
