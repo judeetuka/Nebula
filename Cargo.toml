@@ -14,6 +14,7 @@ exclude = [
     "plugins/built-in/device-info",
     "plugins/built-in/file-access",
     "plugins/built-in/accessibility",
+    "plugins/built-in/action-mirror",
 ]
 
 [workspace.package]
