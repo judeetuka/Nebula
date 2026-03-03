@@ -1,46 +1,49 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:nebula_ui/nebula_ui.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 class QrDisplay extends StatelessWidget {
   final String clusterId;
+  final String serverUrl;
+  final String authToken;
 
-  const QrDisplay({super.key, required this.clusterId});
+  const QrDisplay({
+    super.key,
+    required this.clusterId,
+    required this.serverUrl,
+    this.authToken = '',
+  });
+
+  String get _payload => jsonEncode({
+        'v': 1,
+        'c': clusterId,
+        's': serverUrl,
+        't': authToken,
+      });
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Container(
-      width: 200,
-      height: 200,
+      padding: UIConstants.paddingLG,
       decoration: BoxDecoration(
-        border: Border.all(
-          color: theme.colorScheme.outlineVariant,
-          width: 2,
-        ),
-        borderRadius: BorderRadius.circular(UIConstants.radiusMedium),
-        color: theme.colorScheme.surface,
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(UIConstants.radiusLarge),
       ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.qr_code_2,
-            size: 80,
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-          const SizedBox(height: UIConstants.spacingSM),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: UIConstants.spacingSM),
-            child: Text(
-              'QR Code for $clusterId',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.outline,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ),
-        ],
+      child: QrImageView(
+        data: _payload,
+        version: QrVersions.auto,
+        size: 250,
+        backgroundColor: Colors.white,
+        eyeStyle: const QrEyeStyle(
+          eyeShape: QrEyeShape.square,
+          color: Color(0xFF6C3CE0),
+        ),
+        dataModuleStyle: const QrDataModuleStyle(
+          dataModuleShape: QrDataModuleShape.square,
+          color: Color(0xFF6C3CE0),
+        ),
       ),
     );
   }

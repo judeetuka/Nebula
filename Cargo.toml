@@ -9,6 +9,11 @@ members = [
 exclude = [
     "nebula-node/rust",
     "nebula-admin/rust",
+    "plugins/built-in/comm-link",
+    "plugins/built-in/observer",
+    "plugins/built-in/device-info",
+    "plugins/built-in/file-access",
+    "plugins/built-in/accessibility",
 ]
 
 [workspace.package]

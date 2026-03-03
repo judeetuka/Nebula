@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../features/browser/presentation/pages/browser_page.dart';
+import '../features/engine/presentation/pages/settings_page.dart';
 import '../features/engine/presentation/pages/status_page.dart';
 import '../features/onboarding/presentation/pages/qr_scan_page.dart';
 import '../features/onboarding/presentation/pages/welcome_page.dart';
@@ -12,6 +13,7 @@ class AppRoutes {
   static const scan = '/scan';
   static const status = '/status';
   static const browser = '/browser';
+  static const settings = '/settings';
 }
 
 Route<dynamic>? onGenerateRoute(RouteSettings settings) {
@@ -35,6 +37,11 @@ Route<dynamic>? onGenerateRoute(RouteSettings settings) {
       final initialUrl = settings.arguments as String?;
       return MaterialPageRoute(
         builder: (_) => BrowserPage(initialUrl: initialUrl),
+        settings: settings,
+      );
+    case AppRoutes.settings:
+      return MaterialPageRoute(
+        builder: (_) => const SettingsPage(),
         settings: settings,
       );
     default:

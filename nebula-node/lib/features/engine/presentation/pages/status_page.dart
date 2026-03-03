@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:nebula_ui/nebula_ui.dart';
 
+import '../../../../config/router.dart';
 import '../providers/engine_provider.dart';
 import '../widgets/connection_indicator.dart';
 import '../widgets/node_metrics_card.dart';
@@ -12,7 +13,7 @@ class StatusPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final statusAsync = ref.watch(nodeStatusProvider);
+    final statusAsync = ref.watch(nodeStatusStreamProvider);
 
     return Scaffold(
       appBar: BlurredAppBar(
@@ -20,9 +21,9 @@ class StatusPage extends ConsumerWidget {
         centerTitle: true,
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () => ref.invalidate(nodeStatusProvider),
-            tooltip: 'Refresh status',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () => Navigator.pushNamed(context, AppRoutes.settings),
+            tooltip: 'Settings',
           ),
         ],
       ),
@@ -85,7 +86,7 @@ class StatusPage extends ConsumerWidget {
             ),
             const SizedBox(height: UIConstants.spacingXL),
             FilledButton.icon(
-              onPressed: () => ref.invalidate(nodeStatusProvider),
+              onPressed: () => ref.invalidate(nodeStatusStreamProvider),
               icon: const Icon(Icons.refresh),
               label: const Text('Retry'),
             ),
@@ -132,12 +133,6 @@ class StatusPage extends ConsumerWidget {
               onTap: () => _startEngine(context, ref),
             ),
           ],
-
-          ActionTile(
-            icon: Icons.refresh,
-            title: 'Refresh Status',
-            onTap: () => ref.invalidate(nodeStatusProvider),
-          ),
         ],
       ),
     );
@@ -158,7 +153,7 @@ class StatusPage extends ConsumerWidget {
   Future<void> _shutdownEngine(BuildContext context, WidgetRef ref) async {
     final repository = ref.read(engineRepositoryProvider);
     await repository.shutdownEngine();
-    ref.invalidate(nodeStatusProvider);
+    ref.invalidate(nodeStatusStreamProvider);
 
     if (context.mounted) {
       NotificationToast.info(context, 'Engine shut down');
@@ -168,7 +163,7 @@ class StatusPage extends ConsumerWidget {
   Future<void> _startEngine(BuildContext context, WidgetRef ref) async {
     final repository = ref.read(engineRepositoryProvider);
     await repository.startEngine();
-    ref.invalidate(nodeStatusProvider);
+    ref.invalidate(nodeStatusStreamProvider);
 
     if (context.mounted) {
       NotificationToast.success(context, 'Engine started');

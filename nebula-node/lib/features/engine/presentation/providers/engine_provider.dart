@@ -26,6 +26,23 @@ final nodeStatusProvider = FutureProvider<NodeStatus>((ref) async {
   return repository.getNodeStatus();
 });
 
+final nodeStatusStreamProvider = StreamProvider<NodeStatus>((ref) async* {
+  // Wait for engine init
+  await ref.watch(engineInitProvider.future);
+
+  final repo = ref.watch(engineRepositoryProvider);
+
+  while (true) {
+    try {
+      final status = await repo.getNodeStatus();
+      yield status;
+    } catch (_) {
+      // On error, wait and retry — the stream stays alive
+    }
+    await Future.delayed(const Duration(seconds: 2));
+  }
+});
+
 final isConfiguredProvider = FutureProvider<bool>((ref) async {
   await ref.watch(engineInitProvider.future);
   final repository = ref.watch(engineRepositoryProvider);

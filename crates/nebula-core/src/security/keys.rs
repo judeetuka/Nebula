@@ -42,3 +42,36 @@ impl KeyPair {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_derive_produces_different_keys() {
+        let kp = KeyPair::derive_from_secret(b"test").unwrap();
+        assert_ne!(kp.hmac.0, kp.aes.0); // HMAC and AES keys must differ
+    }
+
+    #[test]
+    fn test_derive_deterministic() {
+        let k1 = KeyPair::derive_from_secret(b"same-secret").unwrap();
+        let k2 = KeyPair::derive_from_secret(b"same-secret").unwrap();
+        assert_eq!(k1.hmac.0, k2.hmac.0);
+        assert_eq!(k1.aes.0, k2.aes.0);
+    }
+
+    #[test]
+    fn test_different_secrets_different_keys() {
+        let k1 = KeyPair::derive_from_secret(b"secret-a").unwrap();
+        let k2 = KeyPair::derive_from_secret(b"secret-b").unwrap();
+        assert_ne!(k1.hmac.0, k2.hmac.0);
+        assert_ne!(k1.aes.0, k2.aes.0);
+    }
+
+    #[test]
+    fn test_empty_secret() {
+        let kp = KeyPair::derive_from_secret(b"").unwrap();
+        assert_ne!(kp.hmac.0, [0u8; 32]); // Even empty secret produces real keys
+    }
+}

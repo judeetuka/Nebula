@@ -106,3 +106,96 @@ impl SecurityEnvelope {
         mac.verify_slice(tag_bytes).is_ok()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::security::keys::KeyPair;
+
+    #[test]
+    fn test_seal_open_roundtrip() {
+        let keys = KeyPair::derive_from_secret(b"test-secret").unwrap();
+        let plaintext = b"Hello, NEBULA!";
+        let sealed = SecurityEnvelope::seal(plaintext, &keys.hmac, &keys.aes).unwrap();
+        let opened = SecurityEnvelope::open(&sealed, &keys.hmac, &keys.aes).unwrap();
+        assert_eq!(opened, plaintext);
+    }
+
+    #[test]
+    fn test_hmac_fast_rejection() {
+        let keys = KeyPair::derive_from_secret(b"test-secret").unwrap();
+        let plaintext = b"test data";
+        let mut sealed = SecurityEnvelope::seal(plaintext, &keys.hmac, &keys.aes).unwrap();
+        // Tamper with the ciphertext (after HMAC tag)
+        let last = sealed.len() - 1;
+        sealed[last] ^= 0xFF;
+        assert!(!SecurityEnvelope::verify_hmac(&sealed, &keys.hmac));
+    }
+
+    #[test]
+    fn test_wrong_key_fails() {
+        let keys1 = KeyPair::derive_from_secret(b"secret-1").unwrap();
+        let keys2 = KeyPair::derive_from_secret(b"secret-2").unwrap();
+        let sealed = SecurityEnvelope::seal(b"data", &keys1.hmac, &keys1.aes).unwrap();
+        assert!(SecurityEnvelope::open(&sealed, &keys2.hmac, &keys2.aes).is_err());
+    }
+
+    #[test]
+    fn test_key_derivation_deterministic() {
+        let k1 = KeyPair::derive_from_secret(b"same").unwrap();
+        let k2 = KeyPair::derive_from_secret(b"same").unwrap();
+        assert_eq!(k1.hmac.0, k2.hmac.0);
+        assert_eq!(k1.aes.0, k2.aes.0);
+    }
+
+    #[test]
+    fn test_sealed_too_short() {
+        let keys = KeyPair::derive_from_secret(b"x").unwrap();
+        assert!(SecurityEnvelope::open(&[0u8; 10], &keys.hmac, &keys.aes).is_err());
+    }
+
+    #[test]
+    fn test_empty_plaintext() {
+        let keys = KeyPair::derive_from_secret(b"x").unwrap();
+        let sealed = SecurityEnvelope::seal(b"", &keys.hmac, &keys.aes).unwrap();
+        let opened = SecurityEnvelope::open(&sealed, &keys.hmac, &keys.aes).unwrap();
+        assert_eq!(opened, b"");
+    }
+
+    #[test]
+    fn test_large_plaintext() {
+        let keys = KeyPair::derive_from_secret(b"x").unwrap();
+        let large = vec![0xABu8; 100_000];
+        let sealed = SecurityEnvelope::seal(&large, &keys.hmac, &keys.aes).unwrap();
+        let opened = SecurityEnvelope::open(&sealed, &keys.hmac, &keys.aes).unwrap();
+        assert_eq!(opened, large);
+    }
+
+    #[test]
+    fn test_verify_hmac_valid() {
+        let keys = KeyPair::derive_from_secret(b"x").unwrap();
+        let sealed = SecurityEnvelope::seal(b"data", &keys.hmac, &keys.aes).unwrap();
+        assert!(SecurityEnvelope::verify_hmac(&sealed, &keys.hmac));
+    }
+
+    #[test]
+    fn test_different_plaintexts_different_ciphertexts() {
+        let keys = KeyPair::derive_from_secret(b"x").unwrap();
+        let s1 = SecurityEnvelope::seal(b"aaa", &keys.hmac, &keys.aes).unwrap();
+        let s2 = SecurityEnvelope::seal(b"bbb", &keys.hmac, &keys.aes).unwrap();
+        assert_ne!(s1, s2);
+    }
+
+    #[test]
+    fn test_same_plaintext_different_nonces() {
+        let keys = KeyPair::derive_from_secret(b"x").unwrap();
+        let s1 = SecurityEnvelope::seal(b"same", &keys.hmac, &keys.aes).unwrap();
+        let s2 = SecurityEnvelope::seal(b"same", &keys.hmac, &keys.aes).unwrap();
+        // Different random nonces -> different ciphertext
+        assert_ne!(s1, s2);
+        // But both decrypt to the same plaintext
+        let p1 = SecurityEnvelope::open(&s1, &keys.hmac, &keys.aes).unwrap();
+        let p2 = SecurityEnvelope::open(&s2, &keys.hmac, &keys.aes).unwrap();
+        assert_eq!(p1, p2);
+    }
+}

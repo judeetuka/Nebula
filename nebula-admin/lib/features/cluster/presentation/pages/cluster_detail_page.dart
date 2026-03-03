@@ -55,7 +55,12 @@ class _ClusterDetailPageState extends ConsumerState<ClusterDetailPage> {
             const SizedBox(height: UIConstants.spacingXL),
 
             // QR code section
-            Center(child: QrDisplay(clusterId: widget.clusterId)),
+            Center(
+              child: QrDisplay(
+                clusterId: widget.clusterId,
+                serverUrl: cluster?.serverUrl ?? '',
+              ),
+            ),
             const SizedBox(height: UIConstants.spacingXL),
 
             // Nodes section
