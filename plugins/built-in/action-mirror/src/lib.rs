@@ -1,9 +1,9 @@
 //! Action Mirror plugin for NEBULA.
 //!
-//! Provides screen capture, remote control, action recording, and macro
-//! replay capabilities. This plugin enables remote device interaction from
-//! the admin dashboard by combining screen capture with accessibility-based
-//! input simulation.
+//! Provides screen capture, remote control, action recording, macro replay,
+//! and puppet mode capabilities. This plugin enables remote device interaction
+//! from the admin dashboard by combining screen capture with accessibility-based
+//! input simulation, and real-time action replication across cluster nodes.
 //!
 //! ## Modules
 //!
@@ -11,8 +11,10 @@
 //! - **remote** -- Remote input commands (tap, swipe, type, gestures)
 //! - **recorder** -- Action recording into named macros with state persistence
 //! - **replay** -- Sequential macro playback with status tracking
+//! - **puppet** -- Real-time action replication (conductor/puppet mode)
 
 pub mod capture;
+pub mod puppet;
 pub mod recorder;
 pub mod remote;
 pub mod replay;
@@ -148,8 +150,31 @@ pub extern "C" fn nebula_plugin_info() -> *const std::ffi::c_char {
     let info = serde_json::json!({
         "id": "com.nebula.action-mirror",
         "name": "Action Mirror",
-        "version": "1.0.0",
-        "capabilities": ["ScreenControl", "Accessibility"]
+        "version": "1.1.0",
+        "capabilities": ["ScreenControl", "Accessibility", "PuppetMode"],
+        "actions": {
+            "capture": [
+                "startCapture", "stopCapture", "getFrame",
+                "getCaptureConfig", "isCapturing"
+            ],
+            "remote": [
+                "remoteTap", "remoteSwipe", "remoteType",
+                "remotePressBack", "remotePressHome", "remoteScroll"
+            ],
+            "recorder": [
+                "startRecording", "recordAction", "stopRecording",
+                "getMacro", "saveMacro", "listMacros", "deleteMacro"
+            ],
+            "replay": [
+                "playMacro", "playMacroByName", "stopPlayback",
+                "getPlaybackStatus"
+            ],
+            "puppet": [
+                "startConductor", "captureAction", "stopConductor",
+                "isConductorActive", "startPuppet", "receiveAction",
+                "stopPuppet", "getPuppetStatus", "isPuppetActive"
+            ]
+        }
     });
     let c_str = CString::new(info.to_string()).unwrap_or_default();
     c_str.into_raw() as *const std::ffi::c_char
@@ -283,6 +308,19 @@ fn dispatch(
                 .ok_or_else(|| "Player not initialized".to_string())?;
             replay::handle_get_playback_status(player)
         }
+
+        // --- Puppet mode: Conductor (master) ---
+        "startConductor" => puppet::start_conductor(ctx, params),
+        "captureAction" => puppet::capture_action(ctx, params),
+        "stopConductor" => puppet::stop_conductor(ctx, params),
+        "isConductorActive" => puppet::is_conductor_active(ctx, params),
+
+        // --- Puppet mode: Puppet (worker) ---
+        "startPuppet" => puppet::start_puppet(ctx, params),
+        "receiveAction" => puppet::receive_action(ctx, params),
+        "stopPuppet" => puppet::stop_puppet(ctx, params),
+        "getPuppetStatus" => puppet::get_puppet_status(ctx, params),
+        "isPuppetActive" => puppet::is_puppet_active(ctx, params),
 
         _ => Err(format!("Unknown action: {action}")),
     }
