@@ -15,6 +15,11 @@ exclude = [
     "plugins/built-in/file-access",
     "plugins/built-in/accessibility",
     "plugins/built-in/action-mirror",
+    "plugins/first-party/browser",
+    "plugins/first-party/email",
+    "plugins/first-party/contacts",
+    "plugins/first-party/classifier",
+    "plugins/first-party/payment-processor",
 ]
 
 [workspace.package]
