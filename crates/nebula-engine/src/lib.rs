@@ -8,4 +8,5 @@ pub mod platform;
 pub mod plugins;
 pub mod routing;
 pub mod runtime;
+pub mod storage;
 pub mod tasks;
