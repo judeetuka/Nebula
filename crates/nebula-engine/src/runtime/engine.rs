@@ -17,6 +17,7 @@ use crate::plugins::registry::PluginRegistry;
 use crate::routing::smart_router::SmartRouter;
 use crate::runtime::state::NodeState;
 use crate::tasks::dispatcher::TaskDispatcher;
+use crate::storage::db::StorageManager;
 use crate::tasks::executor::TaskExecutor;
 
 /// Default maximum pending tasks in the dispatcher queue.
@@ -49,6 +50,7 @@ pub struct NebulaEngine {
     task_executor: Arc<StdRwLock<TaskExecutor>>,
     plugin_registry: Arc<StdRwLock<PluginRegistry>>,
     tunnel_client: Arc<TokioMutex<Option<TunnelClient>>>,
+    storage: Arc<StorageManager>,
     /// Monotonic instant recorded when the engine is created, used to compute
     /// uptime in heartbeat payloads.
     started_at: Instant,
@@ -91,6 +93,11 @@ impl NebulaEngine {
         let plugin_dir = format!("{}/{}", storage_path, DEFAULT_PLUGIN_DIR);
         let plugin_registry = PluginRegistry::new(&plugin_dir);
 
+        // Derive encryption secret from the node identity for storage encryption.
+        let encryption_secret = node_id.0.as_bytes().to_vec();
+        let storage = StorageManager::new(storage_path, &encryption_secret)
+            .with_context(|| "Failed to initialize storage manager")?;
+
         Ok(Self {
             state: Arc::new(RwLock::new(initial_state)),
             identity,
@@ -102,6 +109,7 @@ impl NebulaEngine {
             task_dispatcher: Arc::new(StdRwLock::new(task_dispatcher)),
             task_executor: Arc::new(StdRwLock::new(task_executor)),
             plugin_registry: Arc::new(StdRwLock::new(plugin_registry)),
+            storage: Arc::new(storage),
             tunnel_client: Arc::new(TokioMutex::new(None)),
             started_at: Instant::now(),
         })
@@ -391,6 +399,11 @@ impl NebulaEngine {
     /// Returns a reference to the plugin registry.
     pub fn plugin_registry(&self) -> &Arc<StdRwLock<PluginRegistry>> {
         &self.plugin_registry
+    }
+
+    /// Returns a reference to the storage manager.
+    pub fn storage(&self) -> &Arc<StorageManager> {
+        &self.storage
     }
 
     /// Returns a reference to the tunnel client handle.

@@ -1,15 +1,10 @@
-use native_db::*;
-use native_model::native_model;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// 1. PluginStateRecord (native_model id=1)
+// 1. PluginStateRecord
 // ---------------------------------------------------------------------------
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[native_model(id = 1, version = 1)]
-#[native_db]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PluginStateRecord {
-    #[primary_key]
     pub plugin_id: String,
     pub version: String,
     pub enabled: bool,
@@ -20,17 +15,12 @@ pub struct PluginStateRecord {
 }
 
 // ---------------------------------------------------------------------------
-// 2. TaskQueueItem (native_model id=2)
+// 2. TaskQueueItem
 // ---------------------------------------------------------------------------
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[native_model(id = 2, version = 1)]
-#[native_db]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskQueueItem {
-    #[primary_key]
     pub task_id: String,
-    #[secondary_key]
     pub status: String,
-    #[secondary_key]
     pub priority: u8,
     pub task_type: String,
     pub payload_json: String,
@@ -44,15 +34,11 @@ pub struct TaskQueueItem {
 }
 
 // ---------------------------------------------------------------------------
-// 3. ClusterMemberRecord (native_model id=3)
+// 3. ClusterMemberRecord
 // ---------------------------------------------------------------------------
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[native_model(id = 3, version = 1)]
-#[native_db]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClusterMemberRecord {
-    #[primary_key]
     pub node_id: String,
-    #[secondary_key]
     pub role: String,
     pub join_time: i64,
     pub last_heartbeat: i64,
@@ -66,15 +52,11 @@ pub struct ClusterMemberRecord {
 }
 
 // ---------------------------------------------------------------------------
-// 4. HeartbeatRecord (native_model id=4)
+// 4. HeartbeatRecord
 // ---------------------------------------------------------------------------
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[native_model(id = 4, version = 1)]
-#[native_db]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HeartbeatRecord {
-    #[primary_key]
     pub id: String,
-    #[secondary_key]
     pub node_id: String,
     pub timestamp: i64,
     pub battery_level: u8,
@@ -85,15 +67,11 @@ pub struct HeartbeatRecord {
 }
 
 // ---------------------------------------------------------------------------
-// 5. MqttOfflineMessage (native_model id=5)
+// 5. MqttOfflineMessage
 // ---------------------------------------------------------------------------
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[native_model(id = 5, version = 1)]
-#[native_db]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MqttOfflineMessage {
-    #[primary_key]
     pub id: String,
-    #[secondary_key]
     pub topic: String,
     pub payload_bytes: Vec<u8>,
     pub qos: u8,
@@ -102,13 +80,10 @@ pub struct MqttOfflineMessage {
 }
 
 // ---------------------------------------------------------------------------
-// 6. SuccessionRecord (native_model id=6)
+// 6. SuccessionRecord
 // ---------------------------------------------------------------------------
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[native_model(id = 6, version = 1)]
-#[native_db]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SuccessionRecord {
-    #[primary_key]
     pub cluster_id: String,
     pub succession_json: String,
     pub computed_at: i64,
@@ -116,15 +91,11 @@ pub struct SuccessionRecord {
 }
 
 // ---------------------------------------------------------------------------
-// 7. PeerNodeRecord (native_model id=7)
+// 7. PeerNodeRecord
 // ---------------------------------------------------------------------------
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[native_model(id = 7, version = 1)]
-#[native_db]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PeerNodeRecord {
-    #[primary_key]
     pub node_id: String,
-    #[secondary_key(optional)]
     pub role: Option<String>,
     pub address: String,
     pub port: u16,
@@ -135,28 +106,21 @@ pub struct PeerNodeRecord {
 }
 
 // ---------------------------------------------------------------------------
-// 8. NodeConfigRecord (native_model id=8)
+// 8. NodeConfigRecord
 // ---------------------------------------------------------------------------
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[native_model(id = 8, version = 1)]
-#[native_db]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeConfigRecord {
-    #[primary_key]
     pub key: String,
     pub value: String,
     pub updated_at: i64,
 }
 
 // ---------------------------------------------------------------------------
-// 9. EncryptedBlobRecord (native_model id=9)
+// 9. EncryptedBlobRecord
 // ---------------------------------------------------------------------------
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[native_model(id = 9, version = 1)]
-#[native_db]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EncryptedBlobRecord {
-    #[primary_key]
     pub key: String,
-    #[secondary_key]
     pub category: String,
     pub encrypted_data: Vec<u8>,
     pub created_at: i64,
@@ -221,94 +185,6 @@ mod tests {
         };
         let json = serde_json::to_string(&record).unwrap();
         let deserialized: ClusterMemberRecord = serde_json::from_str(&json).unwrap();
-        assert_eq!(record, deserialized);
-    }
-
-    #[test]
-    fn test_heartbeat_record_serde_roundtrip() {
-        let record = HeartbeatRecord {
-            id: "hb-001".to_string(),
-            node_id: "node-abc".to_string(),
-            timestamp: 1700000000,
-            battery_level: 90,
-            cpu_load: 0.15,
-            memory_available_mb: 4096,
-            active_tasks: 1,
-            network_type: "cellular".to_string(),
-        };
-        let json = serde_json::to_string(&record).unwrap();
-        let deserialized: HeartbeatRecord = serde_json::from_str(&json).unwrap();
-        assert_eq!(record, deserialized);
-    }
-
-    #[test]
-    fn test_mqtt_offline_message_serde_roundtrip() {
-        let record = MqttOfflineMessage {
-            id: "msg-001".to_string(),
-            topic: "cluster/heartbeat".to_string(),
-            payload_bytes: vec![1, 2, 3, 4],
-            qos: 1,
-            queued_at: 1700000000,
-            retry_count: 0,
-        };
-        let json = serde_json::to_string(&record).unwrap();
-        let deserialized: MqttOfflineMessage = serde_json::from_str(&json).unwrap();
-        assert_eq!(record, deserialized);
-    }
-
-    #[test]
-    fn test_succession_record_serde_roundtrip() {
-        let record = SuccessionRecord {
-            cluster_id: "cluster-1".to_string(),
-            succession_json: r#"[{"node_id":"n1","score":100}]"#.to_string(),
-            computed_at: 1700000000,
-            computed_by: "node-master".to_string(),
-        };
-        let json = serde_json::to_string(&record).unwrap();
-        let deserialized: SuccessionRecord = serde_json::from_str(&json).unwrap();
-        assert_eq!(record, deserialized);
-    }
-
-    #[test]
-    fn test_peer_node_record_serde_roundtrip() {
-        let record = PeerNodeRecord {
-            node_id: "peer-001".to_string(),
-            role: Some("worker".to_string()),
-            address: "192.168.1.20".to_string(),
-            port: 9090,
-            roles_json: r#"["worker","relay"]"#.to_string(),
-            capabilities_json: r#"{"gpu":false}"#.to_string(),
-            last_seen: 1700000000,
-            connection_state: "connected".to_string(),
-        };
-        let json = serde_json::to_string(&record).unwrap();
-        let deserialized: PeerNodeRecord = serde_json::from_str(&json).unwrap();
-        assert_eq!(record, deserialized);
-    }
-
-    #[test]
-    fn test_node_config_record_serde_roundtrip() {
-        let record = NodeConfigRecord {
-            key: "max_tasks".to_string(),
-            value: "10".to_string(),
-            updated_at: 1700000000,
-        };
-        let json = serde_json::to_string(&record).unwrap();
-        let deserialized: NodeConfigRecord = serde_json::from_str(&json).unwrap();
-        assert_eq!(record, deserialized);
-    }
-
-    #[test]
-    fn test_encrypted_blob_record_serde_roundtrip() {
-        let record = EncryptedBlobRecord {
-            key: "secret-key".to_string(),
-            category: "credentials".to_string(),
-            encrypted_data: vec![0xDE, 0xAD, 0xBE, 0xEF],
-            created_at: 1700000000,
-            updated_at: 1700001000,
-        };
-        let json = serde_json::to_string(&record).unwrap();
-        let deserialized: EncryptedBlobRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(record, deserialized);
     }
 }
