@@ -3,12 +3,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use sea_orm_migration::MigratorTrait;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tracing::{error, info};
 
 use nebula_server::api;
 use nebula_server::cluster::ClusterRegistry;
 use nebula_server::config::NebulaServerConfig;
+use nebula_server::database::{migrations::Migrator, pool};
 use nebula_server::server::run_server;
 
 /// NEBULA multi-tenant reverse proxy server.
@@ -18,6 +20,13 @@ struct Args {
     /// Path to the TOML configuration file.
     #[clap(short, long, default_value = "nebula-server.toml")]
     config: PathBuf,
+
+    /// Database connection URL.
+    ///
+    /// Supports `sqlite://path` and `postgres://user:pass@host/db`.
+    /// Defaults to `sqlite://nebula_server.db?mode=rwc`.
+    #[clap(long, env = "NEBULA_DATABASE_URL", default_value = pool::DEFAULT_DATABASE_URL)]
+    database_url: String,
 }
 
 #[tokio::main]
@@ -39,6 +48,15 @@ async fn main() -> Result<()> {
 
     // Raise `nofile` limit on linux and mac
     fdlimit::raise_fd_limit();
+
+    // ── Database ────────────────────────────────────────────────────────
+    let db = pool::connect(&args.database_url).await?;
+
+    info!("Running database migrations");
+    Migrator::up(&db, None)
+        .await
+        .with_context(|| "Failed to run database migrations")?;
+    info!("Database migrations complete");
 
     // Load configuration
     let config = NebulaServerConfig::from_file(&args.config)
@@ -69,7 +87,8 @@ async fn main() -> Result<()> {
     // Spawn the REST API if configured
     let api_handle = if let Some(api_config) = config.api {
         let bind_addr = api_config.bind_addr.clone();
-        let router = api::build_router(cluster_registry.clone());
+        let state = api::AppState::with_db(cluster_registry.clone(), db);
+        let router = api::build_router(state);
 
         info!("Starting REST API on {}", bind_addr);
 

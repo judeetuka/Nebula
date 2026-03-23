@@ -1,5 +1,6 @@
 pub mod api;
 pub mod cluster;
+pub mod database;
 pub mod config;
 pub mod config_watcher;
 pub mod constants;

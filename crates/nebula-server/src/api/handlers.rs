@@ -4,6 +4,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use sea_orm::DatabaseConnection;
 use tokio::sync::RwLock;
 
 use crate::cluster::registry::RotationState;
@@ -11,7 +12,29 @@ use crate::cluster::ClusterRegistry;
 use nebula_core::identity::node_id::{ClusterId, NodeId};
 
 /// Shared application state injected into all handlers.
-pub type AppState = Arc<RwLock<ClusterRegistry>>;
+///
+/// Holds both the live in-memory cluster registry (source of truth for tunnel
+/// connections) and an optional database handle for persistent storage.
+#[derive(Clone)]
+pub struct AppState {
+    pub registry: Arc<RwLock<ClusterRegistry>>,
+    pub db: Option<DatabaseConnection>,
+}
+
+impl AppState {
+    /// Create state **without** a database (used in tests and when DB is disabled).
+    pub fn new(registry: Arc<RwLock<ClusterRegistry>>) -> Self {
+        Self { registry, db: None }
+    }
+
+    /// Create state **with** a database connection.
+    pub fn with_db(registry: Arc<RwLock<ClusterRegistry>>, db: DatabaseConnection) -> Self {
+        Self {
+            registry,
+            db: Some(db),
+        }
+    }
+}
 
 /// Request body for triggering a rotation.
 #[derive(serde::Deserialize)]
@@ -29,8 +52,8 @@ pub async fn health() -> impl IntoResponse {
 }
 
 /// GET /api/clusters
-pub async fn list_clusters(State(registry): State<AppState>) -> impl IntoResponse {
-    let registry = registry.read().await;
+pub async fn list_clusters(State(state): State<AppState>) -> impl IntoResponse {
+    let registry = state.registry.read().await;
     let clusters = registry.list_clusters();
     Json(serde_json::json!({
         "clusters": clusters,
@@ -39,10 +62,10 @@ pub async fn list_clusters(State(registry): State<AppState>) -> impl IntoRespons
 
 /// GET /api/clusters/:id/nodes
 pub async fn list_cluster_nodes(
-    State(registry): State<AppState>,
+    State(state): State<AppState>,
     Path(cluster_id): Path<String>,
 ) -> impl IntoResponse {
-    let registry = registry.read().await;
+    let registry = state.registry.read().await;
     let cluster_id = ClusterId(cluster_id);
 
     match registry.list_nodes(&cluster_id) {
@@ -65,7 +88,7 @@ pub async fn list_cluster_nodes(
 
 /// POST /api/clusters/:id/rotate — Trigger manual rotation
 pub async fn trigger_rotation(
-    State(registry): State<AppState>,
+    State(state): State<AppState>,
     Path(cluster_id): Path<String>,
     Json(body): Json<TriggerRotationRequest>,
 ) -> impl IntoResponse {
@@ -84,7 +107,7 @@ pub async fn trigger_rotation(
         }
     };
 
-    let mut registry = registry.write().await;
+    let mut registry = state.registry.write().await;
     match registry.begin_rotation(&cluster_id, &new_master) {
         Ok(()) => (
             StatusCode::OK,
@@ -106,10 +129,10 @@ pub async fn trigger_rotation(
 
 /// GET /api/clusters/:id/rotation — Get rotation status
 pub async fn get_rotation_status(
-    State(registry): State<AppState>,
+    State(state): State<AppState>,
     Path(cluster_id): Path<String>,
 ) -> impl IntoResponse {
-    let registry = registry.read().await;
+    let registry = state.registry.read().await;
     let cluster_id = ClusterId(cluster_id);
 
     match registry.rotation_status(&cluster_id) {
@@ -158,7 +181,7 @@ mod tests {
     use crate::api::routes::build_router;
 
     fn test_state() -> AppState {
-        Arc::new(RwLock::new(ClusterRegistry::new()))
+        AppState::new(Arc::new(RwLock::new(ClusterRegistry::new())))
     }
 
     #[tokio::test]
@@ -235,7 +258,7 @@ mod tests {
 
         // Register a node to create the cluster
         {
-            let mut registry = state.write().await;
+            let mut registry = state.registry.write().await;
             let node = NodeId::generate();
             registry
                 .register_node(&ClusterId("my-cluster".into()), node)
@@ -270,7 +293,7 @@ mod tests {
         let worker = NodeId::generate();
 
         {
-            let mut registry = state.write().await;
+            let mut registry = state.registry.write().await;
             let cluster_id = ClusterId("my-cluster".into());
             registry.register_node(&cluster_id, master).unwrap();
             registry.register_node(&cluster_id, worker).unwrap();
