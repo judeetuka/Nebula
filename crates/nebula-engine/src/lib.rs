@@ -4,6 +4,7 @@ pub mod cluster;
 pub mod identity;
 pub mod mqtt;
 pub mod net;
+pub mod peer;
 pub mod platform;
 pub mod plugins;
 pub mod routing;
