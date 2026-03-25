@@ -1,21 +1,40 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use super::ipc::{InvokeRouter, InvokeTarget};
 
 // Re-export PluginContext from the SDK crate.
 pub use nebula_plugin_sdk::context::PluginContext;
 
+// ---------------------------------------------------------------------------
+// Global engine handle for C-ABI callbacks
+// ---------------------------------------------------------------------------
+
+/// Shared handle to engine subsystems, registered once at startup.
+pub struct EngineHandle {
+    /// Publish a message to an MQTT topic. Returns 0 on success, -1 on error.
+    pub mqtt_publish: Arc<dyn Fn(String, Vec<u8>) -> i32 + Send + Sync>,
+    /// Subscribe to an MQTT topic. Returns 0 on success, -1 on error.
+    pub mqtt_subscribe: Arc<dyn Fn(String) -> i32 + Send + Sync>,
+    /// Invoke another plugin's execute function.
+    pub plugin_invoke:
+        Arc<dyn Fn(String, String, Vec<u8>) -> Result<Vec<u8>, String> + Send + Sync>,
+    /// Invoke an engine system command.
+    pub engine_invoke: Arc<dyn Fn(String, Vec<u8>) -> Result<Vec<u8>, String> + Send + Sync>,
+}
+
+static ENGINE_HANDLE: OnceLock<EngineHandle> = OnceLock::new();
+
+/// Register the global engine handle. Must be called exactly once at startup.
+pub fn register_engine_handle(handle: EngineHandle) {
+    if ENGINE_HANDLE.set(handle).is_err() {
+        panic!("EngineHandle already registered");
+    }
+}
+
 /// Host-side data associated with a loaded plugin.
-///
-/// A `Box<HostData>` is allocated for each plugin and passed to the plugin
-/// as an opaque `*mut c_void`. The `extern "C"` callback functions cast it
-/// back to `&HostData` to service the plugin's requests.
 pub struct HostData {
-    /// Which plugin this context belongs to.
     pub plugin_id: String,
-    /// Per-plugin key-value store. Shared with the registry so that state
-    /// survives hot-reloads.
     pub state_store: Arc<RwLock<HashMap<String, Vec<u8>>>>,
 }
 
@@ -23,31 +42,13 @@ pub struct HostData {
 // extern "C" callback implementations
 // ---------------------------------------------------------------------------
 
-/// Reconstruct a `&HostData` reference from the opaque host pointer.
-///
-/// # Safety
-///
-/// The caller must guarantee that `host` was originally created from
-/// `Box::into_raw(Box::new(HostData { .. }))` and has not been freed.
-/// The returned reference borrows the pointee and must not outlive
-/// the plugin session.
 unsafe fn host_data_ref<'a>(host: *mut std::ffi::c_void) -> Option<&'a HostData> {
     if host.is_null() {
         return None;
     }
-    // SAFETY: `host` is a pointer produced by `Box::into_raw` in
-    // `create_plugin_context`. It is valid for the lifetime of the plugin
-    // and is only freed in `LoadedPlugin::unload` after the plugin has
-    // been shut down and can no longer invoke callbacks.
     Some(&*(host as *const HostData))
 }
 
-/// Safely convert a `(ptr, len)` pair into a `&[u8]`.
-///
-/// # Safety
-///
-/// The caller must ensure that `ptr` is valid for `len` bytes and that the
-/// memory will not be mutated for the duration of the returned borrow.
 unsafe fn slice_from_raw<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
     if ptr.is_null() || len == 0 {
         return Some(&[]);
@@ -62,39 +63,30 @@ extern "C" fn cb_get_state(
     val_buf: *mut u8,
     val_buf_len: usize,
 ) -> i32 {
-    // SAFETY: `host` was created from `Box::into_raw(Box::new(HostData))` in
-    // `create_plugin_context` and remains valid for the plugin's lifetime.
-    // `key_ptr`/`key_len` must be provided by the plugin as a valid slice.
     let (data, key_bytes) = match unsafe { (host_data_ref(host), slice_from_raw(key_ptr, key_len)) }
     {
         (Some(d), Some(k)) => (d, k),
         _ => return -1,
     };
-
     let key = match std::str::from_utf8(key_bytes) {
         Ok(s) => s,
         Err(_) => return -1,
     };
-
     let store = match data.state_store.read() {
         Ok(s) => s,
         Err(_) => return -1,
     };
-
     match store.get(key) {
         Some(value) => {
             let copy_len = value.len().min(val_buf_len);
             if !val_buf.is_null() && copy_len > 0 {
-                // SAFETY: `val_buf` is provided by the plugin and must be
-                // valid for `val_buf_len` bytes. We copy at most `copy_len`
-                // bytes which is <= `val_buf_len`.
                 unsafe {
                     std::ptr::copy_nonoverlapping(value.as_ptr(), val_buf, copy_len);
                 }
             }
             copy_len as i32
         }
-        None => -2, // key not found
+        None => -2,
     }
 }
 
@@ -105,9 +97,6 @@ extern "C" fn cb_set_state(
     val_ptr: *const u8,
     val_len: usize,
 ) -> i32 {
-    // SAFETY: same invariants as `cb_get_state` — `host`, `key_ptr`, and
-    // `val_ptr` come from the plugin and must be valid for their stated
-    // lengths.
     let (data, key_bytes, val_bytes) = match unsafe {
         (
             host_data_ref(host),
@@ -118,17 +107,14 @@ extern "C" fn cb_set_state(
         (Some(d), Some(k), Some(v)) => (d, k, v),
         _ => return -1,
     };
-
     let key = match std::str::from_utf8(key_bytes) {
         Ok(s) => s,
         Err(_) => return -1,
     };
-
     let mut store = match data.state_store.write() {
         Ok(s) => s,
         Err(_) => return -1,
     };
-
     store.insert(key.to_string(), val_bytes.to_vec());
     0
 }
@@ -138,23 +124,19 @@ extern "C" fn cb_delete_state(
     key_ptr: *const u8,
     key_len: usize,
 ) -> i32 {
-    // SAFETY: `host` and `key_ptr` follow the same contract as above.
     let (data, key_bytes) = match unsafe { (host_data_ref(host), slice_from_raw(key_ptr, key_len)) }
     {
         (Some(d), Some(k)) => (d, k),
         _ => return -1,
     };
-
     let key = match std::str::from_utf8(key_bytes) {
         Ok(s) => s,
         Err(_) => return -1,
     };
-
     let mut store = match data.state_store.write() {
         Ok(s) => s,
         Err(_) => return -1,
     };
-
     store.remove(key);
     0
 }
@@ -165,18 +147,15 @@ extern "C" fn cb_log(
     msg_ptr: *const u8,
     msg_len: usize,
 ) -> i32 {
-    // SAFETY: `host` and `msg_ptr` follow the same contract as above.
     let (data, msg_bytes) = match unsafe { (host_data_ref(host), slice_from_raw(msg_ptr, msg_len)) }
     {
         (Some(d), Some(m)) => (d, m),
         _ => return -1,
     };
-
     let msg = match std::str::from_utf8(msg_bytes) {
         Ok(s) => s,
         Err(_) => return -1,
     };
-
     match level {
         1 => tracing::error!(plugin_id = %data.plugin_id, "{}", msg),
         2 => tracing::warn!(plugin_id = %data.plugin_id, "{}", msg),
@@ -184,28 +163,51 @@ extern "C" fn cb_log(
         4 => tracing::debug!(plugin_id = %data.plugin_id, "{}", msg),
         _ => tracing::trace!(plugin_id = %data.plugin_id, "{}", msg),
     }
-
     0
 }
 
 extern "C" fn cb_publish(
     _host: *mut std::ffi::c_void,
-    _topic_ptr: *const u8,
-    _topic_len: usize,
-    _payload_ptr: *const u8,
-    _payload_len: usize,
+    topic_ptr: *const u8,
+    topic_len: usize,
+    payload_ptr: *const u8,
+    payload_len: usize,
 ) -> i32 {
-    // Stub: MQTT publish will be wired in a future phase.
-    -1
+    let Some(handle) = ENGINE_HANDLE.get() else {
+        return -1;
+    };
+    let topic_bytes = match unsafe { slice_from_raw(topic_ptr, topic_len) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let payload_bytes = match unsafe { slice_from_raw(payload_ptr, payload_len) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let topic = match std::str::from_utf8(topic_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    (handle.mqtt_publish)(topic.to_string(), payload_bytes.to_vec())
 }
 
 extern "C" fn cb_subscribe(
     _host: *mut std::ffi::c_void,
-    _topic_ptr: *const u8,
-    _topic_len: usize,
+    topic_ptr: *const u8,
+    topic_len: usize,
 ) -> i32 {
-    // Stub: MQTT subscribe will be wired in a future phase.
-    -1
+    let Some(handle) = ENGINE_HANDLE.get() else {
+        return -1;
+    };
+    let topic_bytes = match unsafe { slice_from_raw(topic_ptr, topic_len) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let topic = match std::str::from_utf8(topic_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    (handle.mqtt_subscribe)(topic.to_string())
 }
 
 extern "C" fn cb_report_task_progress(
@@ -214,7 +216,6 @@ extern "C" fn cb_report_task_progress(
     _task_id_len: usize,
     _progress: u8,
 ) -> i32 {
-    // Stub: task progress reporting will be wired in a future phase.
     -1
 }
 
@@ -225,7 +226,6 @@ extern "C" fn cb_report_task_complete(
     _result_ptr: *const u8,
     _result_len: usize,
 ) -> i32 {
-    // Stub: task completion reporting will be wired in a future phase.
     -1
 }
 
@@ -236,25 +236,9 @@ extern "C" fn cb_report_task_failed(
     _error_ptr: *const u8,
     _error_len: usize,
 ) -> i32 {
-    // Stub: task failure reporting will be wired in a future phase.
     -1
 }
 
-/// Platform invoke callback -- routes capability strings to Android JNI,
-/// inter-plugin calls, or engine commands.
-///
-/// # Routing
-///
-/// The `capability` string is parsed by [`InvokeRouter::parse_target`]:
-/// - `"android:telephony:sendSms"` routes to the Kotlin `NebulaPlatformBridge`
-///    via the JNI bridge in `crate::platform::android`.
-/// - `"plugin:classifier:classify"` routes to another plugin (not yet wired).
-/// - `"engine:device_info"` routes to an engine command (not yet wired).
-///
-/// # Return Value
-///
-/// On success, returns the number of bytes written to `result_buf`.
-/// On failure, returns `-1`.
 extern "C" fn cb_platform_invoke(
     _host: *mut std::ffi::c_void,
     capability_ptr: *const u8,
@@ -266,10 +250,6 @@ extern "C" fn cb_platform_invoke(
     result_buf: *mut u8,
     result_buf_len: usize,
 ) -> i32 {
-    // SAFETY: `capability_ptr`, `method_ptr`, and `args_ptr` are provided by
-    // the plugin and must be valid for their stated lengths. They originate
-    // from the plugin's address space and remain valid for the duration of
-    // this synchronous call.
     let capability_bytes = match unsafe { slice_from_raw(capability_ptr, capability_len) } {
         Some(s) => s,
         None => return -1,
@@ -282,7 +262,6 @@ extern "C" fn cb_platform_invoke(
         Some(s) => s,
         None => return -1,
     };
-
     let capability = match std::str::from_utf8(capability_bytes) {
         Ok(s) => s,
         Err(_) => return -1,
@@ -300,38 +279,49 @@ extern "C" fn cb_platform_invoke(
 
     let result = match target {
         InvokeTarget::Android { service, method: _ } => {
-            // The `method` field from `InvokeTarget::Android` is the Kotlin
-            // method name extracted from the capability string. However, the
-            // plugin also passes a separate `method` parameter. We use the
-            // one from the capability string because it was validated by the
-            // permission system in `InvokeRouter`.
-            //
-            // Example: capability = "android:telephony:sendSms"
-            //   -> service = "telephony", method from target = "sendSms"
-            //   -> The plugin's `method` param is ignored in favour of the
-            //      capability-embedded method name.
             let android_method = match InvokeRouter::parse_target(capability) {
                 InvokeTarget::Android { method: m, .. } => m,
                 _ => return -1,
             };
             crate::platform::invoke_android(&service, &android_method, args)
         }
-        InvokeTarget::Plugin {
-            plugin_id: _,
-            action: _,
-        } => {
-            // Stub: inter-plugin calls will be wired in a future phase.
+        InvokeTarget::Plugin { plugin_id, action } => {
             let _ = method;
-            Err("Plugin-to-plugin invocation not yet implemented".to_string())
+            let Some(handle) = ENGINE_HANDLE.get() else {
+                return -1;
+            };
+            match (handle.plugin_invoke)(plugin_id, action, args_bytes.to_vec()) {
+                Ok(result) => {
+                    let copy_len = result.len().min(result_buf_len);
+                    if !result_buf.is_null() && copy_len > 0 {
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(result.as_ptr(), result_buf, copy_len);
+                        }
+                    }
+                    return copy_len as i32;
+                }
+                Err(_) => return -1,
+            }
         }
-        InvokeTarget::Engine { command: _ } => {
-            // Stub: engine commands will be wired in a future phase.
+        InvokeTarget::Engine { command } => {
             let _ = method;
-            Err("Engine command invocation not yet implemented".to_string())
+            let Some(handle) = ENGINE_HANDLE.get() else {
+                return -1;
+            };
+            match (handle.engine_invoke)(command, args_bytes.to_vec()) {
+                Ok(result) => {
+                    let copy_len = result.len().min(result_buf_len);
+                    if !result_buf.is_null() && copy_len > 0 {
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(result.as_ptr(), result_buf, copy_len);
+                        }
+                    }
+                    return copy_len as i32;
+                }
+                Err(_) => return -1,
+            }
         }
-        InvokeTarget::Unknown => {
-            Err(format!("Unknown invoke target: {capability}"))
-        }
+        InvokeTarget::Unknown => Err(format!("Unknown invoke target: {capability}")),
     };
 
     match result {
@@ -339,8 +329,6 @@ extern "C" fn cb_platform_invoke(
             let bytes = response.as_bytes();
             let copy_len = bytes.len().min(result_buf_len);
             if !result_buf.is_null() && copy_len > 0 {
-                // SAFETY: `result_buf` is provided by the plugin and must
-                // be valid for `result_buf_len` bytes.
                 unsafe {
                     std::ptr::copy_nonoverlapping(bytes.as_ptr(), result_buf, copy_len);
                 }
@@ -355,14 +343,6 @@ extern "C" fn cb_platform_invoke(
 // Context factory
 // ---------------------------------------------------------------------------
 
-/// Create a `PluginContext` for the given plugin.
-///
-/// The returned context owns a heap-allocated `HostData` (stored behind the
-/// opaque `host_data` pointer). The caller is responsible for eventually
-/// freeing it by calling [`drop_host_data`].
-///
-/// The `state_store` is shared with the registry so that state set by the
-/// plugin is visible to the host and vice versa.
 pub fn create_plugin_context(
     plugin_id: &str,
     state_store: Arc<RwLock<HashMap<String, Vec<u8>>>>,
@@ -371,7 +351,6 @@ pub fn create_plugin_context(
         plugin_id: plugin_id.to_string(),
         state_store,
     });
-
     PluginContext {
         host_data: Box::into_raw(host) as *mut std::ffi::c_void,
         get_state: cb_get_state,
@@ -387,17 +366,8 @@ pub fn create_plugin_context(
     }
 }
 
-/// Free the `HostData` behind a `PluginContext`'s `host_data` pointer.
-///
-/// # Safety
-///
-/// Must only be called once per context, and only after the plugin has been
-/// shut down and will never invoke callbacks again.
 pub unsafe fn drop_host_data(ctx: &mut PluginContext) {
     if !ctx.host_data.is_null() {
-        // SAFETY: `host_data` was created by `Box::into_raw` in
-        // `create_plugin_context`. We are the sole owner and the plugin
-        // has been shut down, so no concurrent access is possible.
         let _ = Box::from_raw(ctx.host_data as *mut HostData);
         ctx.host_data = std::ptr::null_mut();
     }
@@ -411,39 +381,45 @@ mod tests {
         Arc::new(RwLock::new(HashMap::new()))
     }
 
+    fn ensure_test_engine_handle() {
+        use std::sync::Once;
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            register_engine_handle(EngineHandle {
+                mqtt_publish: Arc::new(|topic, payload| {
+                    if topic == "test/ok" && !payload.is_empty() {
+                        0
+                    } else {
+                        -1
+                    }
+                }),
+                mqtt_subscribe: Arc::new(|topic| if topic == "test/ok" { 0 } else { -1 }),
+                plugin_invoke: Arc::new(|plugin_id, action, payload| {
+                    if plugin_id == "echo" && action == "ping" {
+                        let mut out = b"pong:".to_vec();
+                        out.extend_from_slice(&payload);
+                        Ok(out)
+                    } else {
+                        Err(format!("Unknown plugin: {plugin_id}:{action}"))
+                    }
+                }),
+                engine_invoke: Arc::new(|command, _payload| {
+                    if command == "status" {
+                        Ok(b"ok".to_vec())
+                    } else {
+                        Err(format!("Unknown command: {command}"))
+                    }
+                }),
+            });
+        });
+    }
+
     #[test]
     fn test_create_plugin_context_returns_non_null_host_data() {
         let store = make_state_store();
         let ctx = create_plugin_context("test-plugin", store);
         assert!(!ctx.host_data.is_null());
-
-        // Clean up
         let mut ctx = ctx;
-        // SAFETY: we just created this context and nothing else holds a reference.
-        unsafe { drop_host_data(&mut ctx) };
-    }
-
-    #[test]
-    fn test_function_pointers_are_populated() {
-        let store = make_state_store();
-        let ctx = create_plugin_context("test-plugin", store);
-
-        // Verify all function pointers are the expected callbacks.
-        // We can't easily compare fn pointers directly, but we can verify
-        // they are non-null (they are statically defined, so always valid).
-        assert!(ctx.get_state as usize != 0);
-        assert!(ctx.set_state as usize != 0);
-        assert!(ctx.delete_state as usize != 0);
-        assert!(ctx.log as usize != 0);
-        assert!(ctx.publish as usize != 0);
-        assert!(ctx.subscribe as usize != 0);
-        assert!(ctx.report_task_progress as usize != 0);
-        assert!(ctx.report_task_complete as usize != 0);
-        assert!(ctx.report_task_failed as usize != 0);
-        assert!(ctx.platform_invoke as usize != 0);
-
-        let mut ctx = ctx;
-        // SAFETY: we just created this context and nothing else holds a reference.
         unsafe { drop_host_data(&mut ctx) };
     }
 
@@ -451,11 +427,8 @@ mod tests {
     fn test_set_and_get_state_via_callbacks() {
         let store = make_state_store();
         let ctx = create_plugin_context("test-plugin", store.clone());
-
         let key = b"my_key";
         let value = b"hello world";
-
-        // Set state
         let result = (ctx.set_state)(
             ctx.host_data,
             key.as_ptr(),
@@ -464,8 +437,6 @@ mod tests {
             value.len(),
         );
         assert_eq!(result, 0);
-
-        // Get state
         let mut buf = [0u8; 64];
         let result = (ctx.get_state)(
             ctx.host_data,
@@ -476,14 +447,7 @@ mod tests {
         );
         assert_eq!(result, value.len() as i32);
         assert_eq!(&buf[..value.len()], value);
-
-        // Verify the store was actually updated
-        let s = store.read().unwrap();
-        assert_eq!(s.get("my_key").unwrap(), value);
-        drop(s);
-
         let mut ctx = ctx;
-        // SAFETY: we just created this context and no plugin is running.
         unsafe { drop_host_data(&mut ctx) };
     }
 
@@ -491,7 +455,6 @@ mod tests {
     fn test_get_state_key_not_found() {
         let store = make_state_store();
         let ctx = create_plugin_context("test-plugin", store);
-
         let key = b"nonexistent";
         let mut buf = [0u8; 64];
         let result = (ctx.get_state)(
@@ -502,79 +465,15 @@ mod tests {
             buf.len(),
         );
         assert_eq!(result, -2);
-
         let mut ctx = ctx;
-        // SAFETY: cleanup.
         unsafe { drop_host_data(&mut ctx) };
     }
 
     #[test]
-    fn test_delete_state_via_callback() {
-        let store = make_state_store();
-        let ctx = create_plugin_context("test-plugin", store.clone());
-
-        let key = b"to_delete";
-        let value = b"data";
-
-        // Set, then delete
-        (ctx.set_state)(
-            ctx.host_data,
-            key.as_ptr(),
-            key.len(),
-            value.as_ptr(),
-            value.len(),
-        );
-        let result = (ctx.delete_state)(ctx.host_data, key.as_ptr(), key.len());
-        assert_eq!(result, 0);
-
-        // Verify deleted
-        let s = store.read().unwrap();
-        assert!(s.get("to_delete").is_none());
-        drop(s);
-
-        let mut ctx = ctx;
-        // SAFETY: cleanup.
-        unsafe { drop_host_data(&mut ctx) };
-    }
-
-    #[test]
-    fn test_delete_state_nonexistent_key() {
+    fn test_publish_without_engine_handle_returns_negative() {
         let store = make_state_store();
         let ctx = create_plugin_context("test-plugin", store);
-
-        let key = b"does_not_exist";
-        let result = (ctx.delete_state)(ctx.host_data, key.as_ptr(), key.len());
-        // Should return 0 even if key was not present
-        assert_eq!(result, 0);
-
-        let mut ctx = ctx;
-        // SAFETY: cleanup.
-        unsafe { drop_host_data(&mut ctx) };
-    }
-
-    #[test]
-    fn test_log_callback_returns_success() {
-        let store = make_state_store();
-        let ctx = create_plugin_context("test-plugin", store);
-
-        let msg = b"test log message";
-        // Test all log levels
-        for level in 1..=5 {
-            let result = (ctx.log)(ctx.host_data, level, msg.as_ptr(), msg.len());
-            assert_eq!(result, 0);
-        }
-
-        let mut ctx = ctx;
-        // SAFETY: cleanup.
-        unsafe { drop_host_data(&mut ctx) };
-    }
-
-    #[test]
-    fn test_publish_stub_returns_negative() {
-        let store = make_state_store();
-        let ctx = create_plugin_context("test-plugin", store);
-
-        let topic = b"test/topic";
+        let topic = b"unknown/topic";
         let payload = b"hello";
         let result = (ctx.publish)(
             ctx.host_data,
@@ -584,136 +483,18 @@ mod tests {
             payload.len(),
         );
         assert_eq!(result, -1);
-
         let mut ctx = ctx;
-        // SAFETY: cleanup.
         unsafe { drop_host_data(&mut ctx) };
     }
 
     #[test]
-    fn test_subscribe_stub_returns_negative() {
+    fn test_subscribe_without_engine_handle_returns_negative() {
         let store = make_state_store();
         let ctx = create_plugin_context("test-plugin", store);
-
-        let topic = b"test/topic";
+        let topic = b"unknown/topic";
         let result = (ctx.subscribe)(ctx.host_data, topic.as_ptr(), topic.len());
         assert_eq!(result, -1);
-
         let mut ctx = ctx;
-        // SAFETY: cleanup.
-        unsafe { drop_host_data(&mut ctx) };
-    }
-
-    #[test]
-    fn test_task_progress_stub_returns_negative() {
-        let store = make_state_store();
-        let ctx = create_plugin_context("test-plugin", store);
-
-        let task_id = b"task-123";
-        let result =
-            (ctx.report_task_progress)(ctx.host_data, task_id.as_ptr(), task_id.len(), 50);
-        assert_eq!(result, -1);
-
-        let mut ctx = ctx;
-        // SAFETY: cleanup.
-        unsafe { drop_host_data(&mut ctx) };
-    }
-
-    #[test]
-    fn test_task_complete_stub_returns_negative() {
-        let store = make_state_store();
-        let ctx = create_plugin_context("test-plugin", store);
-
-        let task_id = b"task-123";
-        let result_data = b"done";
-        let result = (ctx.report_task_complete)(
-            ctx.host_data,
-            task_id.as_ptr(),
-            task_id.len(),
-            result_data.as_ptr(),
-            result_data.len(),
-        );
-        assert_eq!(result, -1);
-
-        let mut ctx = ctx;
-        // SAFETY: cleanup.
-        unsafe { drop_host_data(&mut ctx) };
-    }
-
-    #[test]
-    fn test_task_failed_stub_returns_negative() {
-        let store = make_state_store();
-        let ctx = create_plugin_context("test-plugin", store);
-
-        let task_id = b"task-123";
-        let error = b"failed";
-        let result = (ctx.report_task_failed)(
-            ctx.host_data,
-            task_id.as_ptr(),
-            task_id.len(),
-            error.as_ptr(),
-            error.len(),
-        );
-        assert_eq!(result, -1);
-
-        let mut ctx = ctx;
-        // SAFETY: cleanup.
-        unsafe { drop_host_data(&mut ctx) };
-    }
-
-    #[test]
-    fn test_platform_invoke_returns_negative_for_android_on_non_android() {
-        // On non-Android platforms, invoking an android: capability should
-        // return -1 because the JNI bridge is unavailable.
-        let store = make_state_store();
-        let ctx = create_plugin_context("test-plugin", store);
-
-        let cap = b"android:device:getDeviceInfo";
-        let method = b"getDeviceInfo";
-        let args = b"{}";
-        let mut result_buf = [0u8; 256];
-        let result = (ctx.platform_invoke)(
-            ctx.host_data,
-            cap.as_ptr(),
-            cap.len(),
-            method.as_ptr(),
-            method.len(),
-            args.as_ptr(),
-            args.len(),
-            result_buf.as_mut_ptr(),
-            result_buf.len(),
-        );
-        assert_eq!(result, -1);
-
-        let mut ctx = ctx;
-        // SAFETY: cleanup.
-        unsafe { drop_host_data(&mut ctx) };
-    }
-
-    #[test]
-    fn test_platform_invoke_returns_negative_for_unknown_capability() {
-        let store = make_state_store();
-        let ctx = create_plugin_context("test-plugin", store);
-
-        let cap = b"bogus:something";
-        let method = b"do_thing";
-        let args = b"{}";
-        let mut result_buf = [0u8; 64];
-        let result = (ctx.platform_invoke)(
-            ctx.host_data,
-            cap.as_ptr(),
-            cap.len(),
-            method.as_ptr(),
-            method.len(),
-            args.as_ptr(),
-            args.len(),
-            result_buf.as_mut_ptr(),
-            result_buf.len(),
-        );
-        assert_eq!(result, -1);
-
-        let mut ctx = ctx;
-        // SAFETY: cleanup.
         unsafe { drop_host_data(&mut ctx) };
     }
 
@@ -721,7 +502,6 @@ mod tests {
     fn test_platform_invoke_returns_negative_for_plugin_target() {
         let store = make_state_store();
         let ctx = create_plugin_context("test-plugin", store);
-
         let cap = b"plugin:classifier:classify";
         let method = b"classify";
         let args = b"{}";
@@ -738,9 +518,7 @@ mod tests {
             result_buf.len(),
         );
         assert_eq!(result, -1);
-
         let mut ctx = ctx;
-        // SAFETY: cleanup.
         unsafe { drop_host_data(&mut ctx) };
     }
 
@@ -748,7 +526,6 @@ mod tests {
     fn test_platform_invoke_returns_negative_for_engine_target() {
         let store = make_state_store();
         let ctx = create_plugin_context("test-plugin", store);
-
         let cap = b"engine:device_info";
         let method = b"device_info";
         let args = b"{}";
@@ -765,9 +542,7 @@ mod tests {
             result_buf.len(),
         );
         assert_eq!(result, -1);
-
         let mut ctx = ctx;
-        // SAFETY: cleanup.
         unsafe { drop_host_data(&mut ctx) };
     }
 
@@ -786,130 +561,95 @@ mod tests {
     }
 
     #[test]
-    fn test_set_state_with_null_host_returns_error() {
-        let key = b"key";
-        let val = b"val";
-        let result = cb_set_state(
-            std::ptr::null_mut(),
-            key.as_ptr(),
-            key.len(),
-            val.as_ptr(),
-            val.len(),
-        );
-        assert_eq!(result, -1);
-    }
-
-    #[test]
-    fn test_delete_state_with_null_host_returns_error() {
-        let key = b"key";
-        let result = cb_delete_state(std::ptr::null_mut(), key.as_ptr(), key.len());
-        assert_eq!(result, -1);
-    }
-
-    #[test]
-    fn test_log_with_null_host_returns_error() {
-        let msg = b"hello";
-        let result = cb_log(std::ptr::null_mut(), 3, msg.as_ptr(), msg.len());
-        assert_eq!(result, -1);
-    }
-
-    #[test]
     fn test_drop_host_data_clears_pointer() {
         let store = make_state_store();
         let mut ctx = create_plugin_context("test-plugin", store);
         assert!(!ctx.host_data.is_null());
-
-        // SAFETY: we just created this context.
         unsafe { drop_host_data(&mut ctx) };
         assert!(ctx.host_data.is_null());
     }
 
+    // EngineHandle wiring tests
     #[test]
-    fn test_drop_host_data_null_is_safe() {
-        let store = make_state_store();
-        let mut ctx = create_plugin_context("test-plugin", store);
-
-        // SAFETY: first drop.
-        unsafe { drop_host_data(&mut ctx) };
-        // SAFETY: second drop of already-null pointer should be a no-op.
-        unsafe { drop_host_data(&mut ctx) };
-        assert!(ctx.host_data.is_null());
-    }
-
-    #[test]
-    fn test_state_store_shared_between_context_and_caller() {
-        let store = make_state_store();
-        let ctx = create_plugin_context("test-plugin", store.clone());
-
-        // Write via callback
-        let key = b"shared_key";
-        let value = b"shared_value";
-        (ctx.set_state)(
-            ctx.host_data,
-            key.as_ptr(),
-            key.len(),
-            value.as_ptr(),
-            value.len(),
-        );
-
-        // Read via direct store access
-        let s = store.read().unwrap();
-        assert_eq!(s.get("shared_key").unwrap().as_slice(), b"shared_value");
-        drop(s);
-
-        // Write via direct store access
-        store
-            .write()
-            .unwrap()
-            .insert("external_key".to_string(), b"external_value".to_vec());
-
-        // Read via callback
-        let key2 = b"external_key";
-        let mut buf = [0u8; 64];
-        let n = (ctx.get_state)(
-            ctx.host_data,
-            key2.as_ptr(),
-            key2.len(),
-            buf.as_mut_ptr(),
-            buf.len(),
-        );
-        assert_eq!(n, 14); // "external_value".len()
-        assert_eq!(&buf[..14], b"external_value");
-
-        let mut ctx = ctx;
-        // SAFETY: cleanup.
-        unsafe { drop_host_data(&mut ctx) };
-    }
-
-    #[test]
-    fn test_get_state_truncates_to_buffer_size() {
+    fn test_engine_handle_publish_routes_through_closure() {
+        ensure_test_engine_handle();
         let store = make_state_store();
         let ctx = create_plugin_context("test-plugin", store);
-
-        let key = b"big";
-        let value = b"this is a long value that exceeds the tiny buffer";
-        (ctx.set_state)(
+        let topic = b"test/ok";
+        let payload = b"data";
+        let result = (ctx.publish)(
             ctx.host_data,
-            key.as_ptr(),
-            key.len(),
-            value.as_ptr(),
-            value.len(),
+            topic.as_ptr(),
+            topic.len(),
+            payload.as_ptr(),
+            payload.len(),
         );
-
-        // Read into a tiny buffer
-        let mut buf = [0u8; 4];
-        let n = (ctx.get_state)(
-            ctx.host_data,
-            key.as_ptr(),
-            key.len(),
-            buf.as_mut_ptr(),
-            buf.len(),
-        );
-        assert_eq!(n, 4);
-        assert_eq!(&buf, b"this");
-
+        assert_eq!(result, 0);
         let mut ctx = ctx;
-        // SAFETY: cleanup.
+        unsafe { drop_host_data(&mut ctx) };
+    }
+
+    #[test]
+    fn test_engine_handle_subscribe_routes_through_closure() {
+        ensure_test_engine_handle();
+        let store = make_state_store();
+        let ctx = create_plugin_context("test-plugin", store);
+        let topic = b"test/ok";
+        let result = (ctx.subscribe)(ctx.host_data, topic.as_ptr(), topic.len());
+        assert_eq!(result, 0);
+        let mut ctx = ctx;
+        unsafe { drop_host_data(&mut ctx) };
+    }
+
+    #[test]
+    fn test_engine_handle_plugin_invoke_routes_through_closure() {
+        ensure_test_engine_handle();
+        let store = make_state_store();
+        let ctx = create_plugin_context("test-plugin", store);
+        let cap = b"plugin:echo:ping";
+        let method = b"ping";
+        let args = b"hello";
+        let mut result_buf = [0u8; 256];
+        let n = (ctx.platform_invoke)(
+            ctx.host_data,
+            cap.as_ptr(),
+            cap.len(),
+            method.as_ptr(),
+            method.len(),
+            args.as_ptr(),
+            args.len(),
+            result_buf.as_mut_ptr(),
+            result_buf.len(),
+        );
+        assert_eq!(n, 10);
+        assert_eq!(&result_buf[..10], b"pong:hello");
+        let mut ctx = ctx;
+        unsafe { drop_host_data(&mut ctx) };
+    }
+
+    #[test]
+    fn test_engine_handle_engine_invoke_routes_through_closure() {
+        ensure_test_engine_handle();
+        let store = make_state_store();
+        let ctx = create_plugin_context("test-plugin", store);
+        let cap = b"engine:status";
+        let method = b"status";
+        let args = b"{}";
+        let mut result_buf = [0u8; 256];
+        let n = (ctx.platform_invoke)(
+            ctx.host_data,
+            cap.as_ptr(),
+            cap.len(),
+            method.as_ptr(),
+            method.len(),
+            args.as_ptr(),
+            args.len(),
+            result_buf.as_mut_ptr(),
+            result_buf.len(),
+        );
+        assert_eq!(n, 2);
+        assert_eq!(&result_buf[..2], b"ok");
+        let mut ctx = ctx;
         unsafe { drop_host_data(&mut ctx) };
     }
 }

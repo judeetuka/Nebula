@@ -147,18 +147,45 @@ impl PluginRegistry {
     /// # Errors
     ///
     /// Returns an error if the plugin is not found or not loaded.
-    pub fn execute_plugin(
-        &self,
-        plugin_id: &str,
-        input: &[u8],
-        output: &mut [u8],
-    ) -> Result<i32> {
+    pub fn execute_plugin(&self, plugin_id: &str, input: &[u8], output: &mut [u8]) -> Result<i32> {
         let plugin = self
             .plugins
             .get(plugin_id)
             .ok_or_else(|| anyhow::anyhow!("Plugin not found: {}", plugin_id))?;
 
         plugin.execute(input, output)
+    }
+
+    /// Invoke a plugin's execute function for inter-plugin calls.
+    pub fn invoke_plugin(
+        &self,
+        plugin_id: &str,
+        action: &str,
+        payload: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        let plugin = self
+            .plugins
+            .get(plugin_id)
+            .ok_or_else(|| format!("Plugin not found: {}", plugin_id))?;
+
+        let action_bytes = action.as_bytes();
+        let action_len = (action_bytes.len() as u32).to_le_bytes();
+        let mut input = Vec::with_capacity(4 + action_bytes.len() + payload.len());
+        input.extend_from_slice(&action_len);
+        input.extend_from_slice(action_bytes);
+        input.extend_from_slice(payload);
+
+        let mut output = vec![0u8; 8192];
+        let n = plugin
+            .execute(&input, &mut output)
+            .map_err(|e| e.to_string())?;
+
+        if n < 0 {
+            return Err(format!("Plugin {} returned error code: {}", plugin_id, n));
+        }
+
+        output.truncate(n as usize);
+        Ok(output)
     }
 
     /// Read a value from a plugin's key-value state store.
@@ -494,10 +521,7 @@ mod tests {
     #[test]
     fn test_install_plugin_with_bad_path_fails() {
         let mut registry = PluginRegistry::new("/tmp/plugins");
-        let result = registry.install_plugin(
-            sample_manifest("bad"),
-            "/tmp/nonexistent_99999.so",
-        );
+        let result = registry.install_plugin(sample_manifest("bad"), "/tmp/nonexistent_99999.so");
         assert!(result.is_err());
     }
 

@@ -17,8 +17,8 @@ pub struct EmbeddedBroker {
 
 impl EmbeddedBroker {
     /// Create a new embedded broker configured to listen on the given port.
-    pub fn new(listen_port: u16) -> Self {
-        let config = build_broker_config(listen_port);
+    pub fn new(listen_port: u16, tls: Option<rumqttd::TlsConfig>) -> Self {
+        let config = build_broker_config(listen_port, tls);
         Self {
             config,
             broker: None,
@@ -65,7 +65,7 @@ impl EmbeddedBroker {
 }
 
 /// Build a minimal rumqttd Config for an embedded broker.
-fn build_broker_config(listen_port: u16) -> Config {
+fn build_broker_config(listen_port: u16, tls: Option<rumqttd::TlsConfig>) -> Config {
     let mut servers = HashMap::new();
     servers.insert(
         "nebula-v4".to_string(),
@@ -74,7 +74,7 @@ fn build_broker_config(listen_port: u16) -> Config {
             listen: format!("0.0.0.0:{listen_port}")
                 .parse()
                 .expect("valid socket addr"),
-            tls: None,
+            tls,
             next_connection_delay_ms: 1,
             connections: ConnectionSettings {
                 connection_timeout_ms: 5000,
@@ -107,21 +107,21 @@ mod tests {
 
     #[test]
     fn test_new_broker() {
-        let broker = EmbeddedBroker::new(1883);
+        let broker = EmbeddedBroker::new(1883, None);
         assert_eq!(broker.listen_port(), 1883);
         assert!(!broker.is_running());
     }
 
     #[test]
     fn test_start_sets_running() {
-        let mut broker = EmbeddedBroker::new(11883);
+        let mut broker = EmbeddedBroker::new(11883, None);
         broker.start().unwrap();
         assert!(broker.is_running());
     }
 
     #[test]
     fn test_stop_clears_running() {
-        let mut broker = EmbeddedBroker::new(11884);
+        let mut broker = EmbeddedBroker::new(11884, None);
         broker.start().unwrap();
         broker.stop().unwrap();
         assert!(!broker.is_running());
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_double_start_fails() {
-        let mut broker = EmbeddedBroker::new(11885);
+        let mut broker = EmbeddedBroker::new(11885, None);
         broker.start().unwrap();
 
         let result = broker.start();
@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn test_stop_without_start_fails() {
-        let mut broker = EmbeddedBroker::new(11886);
+        let mut broker = EmbeddedBroker::new(11886, None);
 
         let result = broker.stop();
         assert!(result.is_err());

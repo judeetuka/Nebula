@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
-use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, QoS};
+use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, QoS, TlsConfiguration, Transport};
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -76,10 +76,19 @@ impl MqttClient {
     /// Create a new MQTT client.
     ///
     /// The client is not connected until `connect()` is called.
-    pub fn new(client_id: &str, host: &str, port: u16) -> Result<Self> {
+    pub fn new(
+        client_id: &str,
+        host: &str,
+        port: u16,
+        tls_config: Option<std::sync::Arc<rumqttc::tokio_rustls::rustls::ClientConfig>>,
+    ) -> Result<Self> {
         let mut options = MqttOptions::new(client_id, host, port);
         options.set_keep_alive(std::time::Duration::from_secs(30));
         options.set_clean_session(true);
+        if let Some(tls) = tls_config {
+            let transport = Transport::tls_with_config(TlsConfiguration::Rustls(tls));
+            options.set_transport(transport);
+        }
 
         let (client, event_loop) = AsyncClient::new(options, 100);
         let (message_tx, message_rx) = mpsc::channel(MESSAGE_CHANNEL_BUFFER);
@@ -230,14 +239,14 @@ mod tests {
 
     #[test]
     fn test_new_client() {
-        let client = MqttClient::new("test-node-1", "localhost", 1883).unwrap();
+        let client = MqttClient::new("test-node-1", "localhost", 1883, None).unwrap();
         assert_eq!(client.client_id(), "test-node-1");
         assert!(!client.is_connected());
     }
 
     #[test]
     fn test_new_client_different_params() {
-        let client = MqttClient::new("worker-xyz", "192.168.1.100", 8883).unwrap();
+        let client = MqttClient::new("worker-xyz", "192.168.1.100", 8883, None).unwrap();
         assert_eq!(client.client_id(), "worker-xyz");
         assert!(!client.is_connected());
     }
@@ -308,14 +317,14 @@ mod tests {
 
     #[test]
     fn test_new_client_has_empty_handlers() {
-        let client = MqttClient::new("test", "localhost", 1883).unwrap();
+        let client = MqttClient::new("test", "localhost", 1883, None).unwrap();
         let handlers = client.handlers().read().unwrap();
         assert!(handlers.is_empty());
     }
 
     #[test]
     fn test_on_message_registers_handler() {
-        let client = MqttClient::new("test", "localhost", 1883).unwrap();
+        let client = MqttClient::new("test", "localhost", 1883, None).unwrap();
 
         let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let called_clone = Arc::clone(&called);
@@ -332,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_message_receiver_returns_some_once() {
-        let mut client = MqttClient::new("test", "localhost", 1883).unwrap();
+        let mut client = MqttClient::new("test", "localhost", 1883, None).unwrap();
         let rx = client.message_receiver();
         assert!(rx.is_some());
         let rx2 = client.message_receiver();

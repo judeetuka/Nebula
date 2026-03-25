@@ -198,7 +198,7 @@ impl NebulaEngine {
         // If Master, start MQTT broker
         if role == NodeRole::Master {
             let mut broker_lock = self.mqtt_broker.lock().await;
-            let mut broker = EmbeddedBroker::new(1883);
+            let mut broker = EmbeddedBroker::new(1883, None);
             broker.start()?;
             *broker_lock = Some(broker);
             info!("MQTT broker started (master role)");
@@ -289,7 +289,7 @@ impl NebulaEngine {
             // If Master, start MQTT broker
             if role == NodeRole::Master {
                 let mut broker_lock = mqtt_broker.lock().await;
-                let mut broker = EmbeddedBroker::new(1883);
+                let mut broker = EmbeddedBroker::new(1883, None);
                 broker.start()?;
                 *broker_lock = Some(broker);
                 info!("MQTT broker started (master role)");
@@ -409,6 +409,66 @@ impl NebulaEngine {
     /// Returns a reference to the tunnel client handle.
     pub fn tunnel_client(&self) -> &Arc<TokioMutex<Option<TunnelClient>>> {
         &self.tunnel_client
+    }
+
+    /// Returns a reference to the global event bus.
+    pub fn event_bus(&self) -> &'static crate::api::events::EventBus {
+        crate::api::events::global_event_bus()
+    }
+
+    /// Register the global EngineHandle so that plugin C-ABI callbacks can
+    /// route through the engine's MQTT client, plugin registry, and engine
+    /// command layer. Must be called exactly once.
+    pub fn register_plugin_callbacks(&self) {
+        use crate::plugins::sdk;
+
+        let mqtt_client = Arc::clone(&self.mqtt_client);
+        let mqtt_client_sub = Arc::clone(&self.mqtt_client);
+        let plugin_registry = Arc::clone(&self.plugin_registry);
+
+        sdk::register_engine_handle(sdk::EngineHandle {
+            mqtt_publish: Arc::new(move |topic, payload| {
+                let client = Arc::clone(&mqtt_client);
+                match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => handle.block_on(async {
+                        let lock = client.lock().await;
+                        match lock.as_ref() {
+                            Some(c) => match c.publish(&topic, &payload).await {
+                                Ok(_) => 0,
+                                Err(_) => -1,
+                            },
+                            None => -1,
+                        }
+                    }),
+                    Err(_) => -1,
+                }
+            }),
+            mqtt_subscribe: Arc::new(move |topic| {
+                let client = Arc::clone(&mqtt_client_sub);
+                match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => handle.block_on(async {
+                        let lock = client.lock().await;
+                        match lock.as_ref() {
+                            Some(c) => match c.subscribe(&topic).await {
+                                Ok(_) => 0,
+                                Err(_) => -1,
+                            },
+                            None => -1,
+                        }
+                    }),
+                    Err(_) => -1,
+                }
+            }),
+            plugin_invoke: Arc::new(move |plugin_id, action, payload| {
+                let registry = plugin_registry
+                    .read()
+                    .map_err(|e| format!("Registry lock poisoned: {e}"))?;
+                registry.invoke_plugin(&plugin_id, &action, &payload)
+            }),
+            engine_invoke: Arc::new(|command, _payload| {
+                Err(format!("Engine command not yet implemented: {command}"))
+            }),
+        });
     }
 
     /// Validate and apply a state transition.
