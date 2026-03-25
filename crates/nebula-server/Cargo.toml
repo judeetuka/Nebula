@@ -36,12 +36,13 @@ clap = { version = "3.0", features = ["derive", "env"] }
 url = { version = "2", features = ["serde"] }
 
 # REST API
-axum = "0.7"
+axum = { version = "0.7", features = ["ws"] }
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 
 # Auth
 jsonwebtoken = "9"
+argon2 = "0.5"
 
 # Config hot-reload
 notify = "5.0.0-pre.13"

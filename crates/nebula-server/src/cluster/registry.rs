@@ -124,6 +124,11 @@ impl ClusterRegistry {
         false
     }
 
+    /// Remove an entire cluster. Returns true if the cluster existed.
+    pub fn remove_cluster(&mut self, cluster_id: &ClusterId) -> bool {
+        self.clusters.remove(cluster_id).is_some()
+    }
+
     /// List all cluster IDs.
     pub fn list_clusters(&self) -> Vec<ClusterInfo> {
         self.clusters
@@ -153,11 +158,9 @@ impl ClusterRegistry {
 
     /// Check if a rotation is in progress for this cluster.
     pub fn is_rotating(&self, cluster_id: &ClusterId) -> bool {
-        self.clusters
-            .get(cluster_id)
-            .map_or(false, |cluster| {
-                matches!(cluster.rotation_state, RotationState::InProgress { .. })
-            })
+        self.clusters.get(cluster_id).map_or(false, |cluster| {
+            matches!(cluster.rotation_state, RotationState::InProgress { .. })
+        })
     }
 
     /// Get the rotation status for a cluster. Returns `None` if the cluster does not exist.
@@ -256,10 +259,7 @@ impl ClusterRegistry {
     }
 
     /// Complete rotation: finalize the role swap and reset rotation state.
-    pub fn complete_rotation(
-        &mut self,
-        cluster_id: &ClusterId,
-    ) -> Result<(), RegistrationError> {
+    pub fn complete_rotation(&mut self, cluster_id: &ClusterId) -> Result<(), RegistrationError> {
         let cluster = self
             .clusters
             .get_mut(cluster_id)
@@ -568,7 +568,10 @@ mod tests {
         registry.register_node(&cluster_id, worker).unwrap();
 
         let result = registry.promote_node(&cluster_id, &worker);
-        assert!(matches!(result, Err(RegistrationError::NoRotationInProgress)));
+        assert!(matches!(
+            result,
+            Err(RegistrationError::NoRotationInProgress)
+        ));
     }
 
     #[test]
@@ -616,7 +619,10 @@ mod tests {
         registry.register_node(&cluster_id, master).unwrap();
 
         let result = registry.complete_rotation(&cluster_id);
-        assert!(matches!(result, Err(RegistrationError::NoRotationInProgress)));
+        assert!(matches!(
+            result,
+            Err(RegistrationError::NoRotationInProgress)
+        ));
     }
 
     #[test]

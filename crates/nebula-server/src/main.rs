@@ -87,7 +87,8 @@ async fn main() -> Result<()> {
     // Spawn the REST API if configured
     let api_handle = if let Some(api_config) = config.api {
         let bind_addr = api_config.bind_addr.clone();
-        let state = api::AppState::with_db(cluster_registry.clone(), db);
+        let jwt_config = nebula_server::api::auth::JwtConfig::default();
+        let state = api::AppState::with_db(cluster_registry.clone(), db, jwt_config);
         let router = api::build_router(state);
 
         info!("Starting REST API on {}", bind_addr);
