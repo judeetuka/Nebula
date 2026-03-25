@@ -4,20 +4,31 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:nebula_ui/nebula_ui.dart';
 
 import 'config/router.dart';
+import 'core/di/injection.dart';
+import 'core/storage/local_storage.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Initialize Hive-backed local storage before anything else.
+  final storage = LocalStorage();
+  await storage.init();
+
   // Attempt Firebase initialization. If firebase_options.dart is missing or
   // Firebase is not configured for this environment, the app falls back to
-  // stub auth (see injection.dart).
+  // JWT API auth (see injection.dart).
   try {
     await Firebase.initializeApp();
   } catch (e) {
     debugPrint('Firebase not configured: $e');
   }
 
-  runApp(const ProviderScope(child: NebulaAdminApp()));
+  runApp(
+    ProviderScope(
+      overrides: [localStorageProvider.overrideWithValue(storage)],
+      child: const NebulaAdminApp(),
+    ),
+  );
 }
 
 class NebulaAdminApp extends StatelessWidget {

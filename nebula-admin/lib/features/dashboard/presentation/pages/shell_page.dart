@@ -3,10 +3,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:nebula_ui/nebula_ui.dart';
 
 import '../../../../core/di/injection.dart';
+import '../../../../core/services/server_event.dart';
+import '../../../../core/services/websocket_service.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../cluster/presentation/pages/dashboard_page.dart';
 import '../../../cluster/presentation/providers/cluster_provider.dart';
 import '../../../../config/router.dart';
+import '../widgets/cluster_stats_card.dart';
+import '../widgets/metrics_chart.dart';
 
 class ShellPage extends ConsumerStatefulWidget {
   const ShellPage({super.key});
@@ -143,41 +147,115 @@ class _ShellPageState extends ConsumerState<ShellPage> {
   }
 }
 
-class _OverviewPage extends ConsumerWidget {
+/// Overview / Dashboard page with charts, stats, and real-time event feed.
+class _OverviewPage extends ConsumerStatefulWidget {
   const _OverviewPage();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_OverviewPage> createState() => _OverviewPageState();
+}
+
+class _OverviewPageState extends ConsumerState<_OverviewPage> {
+  final List<ServerEvent> _recentEvents = [];
+  static const int _maxEvents = 20;
+
+  @override
+  void initState() {
+    super.initState();
+    // Ensure clusters and nodes are loaded.
+    Future.microtask(() {
+      ref.read(clustersProvider.notifier).loadClusters();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final clustersState = ref.watch(clustersProvider);
+    final nodesState = ref.watch(clusterNodesProvider);
+
+    // Listen for real-time events.
+    ref.listen<AsyncValue<ServerEvent>>(serverEventsProvider, (_, next) {
+      next.whenData((event) {
+        setState(() {
+          _recentEvents.insert(0, event);
+          if (_recentEvents.length > _maxEvents) {
+            _recentEvents.removeLast();
+          }
+        });
+
+        // Auto-refresh clusters on relevant events.
+        if (event.type == ServerEvent.clusterCreated ||
+            event.type == ServerEvent.clusterDeleted ||
+            event.type == ServerEvent.nodeJoined ||
+            event.type == ServerEvent.nodeLeft) {
+          ref.read(clustersProvider.notifier).loadClusters();
+        }
+      });
+    });
 
     return Scaffold(
       appBar: AppBar(title: const Text('Overview')),
-      body: Padding(
-        padding: UIConstants.paddingLG,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      body: RefreshIndicator(
+        onRefresh: () => ref.read(clustersProvider.notifier).loadClusters(),
+        child: ListView(
+          padding: UIConstants.paddingLG,
           children: [
-            Text('Cluster Summary', style: theme.textTheme.headlineSmall),
-            const SizedBox(height: UIConstants.spacingLG),
-            Row(
-              children: [
-                _StatCard(
-                  label: 'Clusters',
-                  value: '${clustersState.clusters.length}',
-                  icon: Icons.cloud,
-                  color: theme.colorScheme.primary,
-                ),
-                const SizedBox(width: UIConstants.spacingMD),
-                _StatCard(
-                  label: 'Total Nodes',
-                  value:
-                      '${clustersState.clusters.fold<int>(0, (sum, c) => sum + c.nodeCount)}',
-                  icon: Icons.devices,
-                  color: theme.colorScheme.secondary,
-                ),
-              ],
+            // Stats card
+            ClusterStatsCard(
+              clusters: clustersState.clusters,
+              nodes: nodesState.nodes,
             ),
+            const SizedBox(height: UIConstants.spacingLG),
+
+            // Metrics chart
+            MetricsChart(nodes: nodesState.nodes),
+            const SizedBox(height: UIConstants.spacingLG),
+
+            // Real-time event feed
+            Text(
+              'Recent Events',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: UIConstants.spacingSM),
+            if (_recentEvents.isEmpty)
+              Card(
+                child: Padding(
+                  padding: UIConstants.paddingLG,
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.wifi_tethering,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: UIConstants.spacingSM),
+                      Expanded(
+                        child: Text(
+                          'Listening for real-time events...',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else
+              Card(
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  children: [
+                    for (int i = 0; i < _recentEvents.length; i++) ...[
+                      _EventTile(event: _recentEvents[i]),
+                      if (i < _recentEvents.length - 1)
+                        const Divider(height: 1),
+                    ],
+                  ],
+                ),
+              ),
           ],
         ),
       ),
@@ -185,37 +263,48 @@ class _OverviewPage extends ConsumerWidget {
   }
 }
 
-class _StatCard extends StatelessWidget {
-  final String label;
-  final String value;
-  final IconData icon;
-  final Color color;
+class _EventTile extends StatelessWidget {
+  final ServerEvent event;
 
-  const _StatCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-  });
+  const _EventTile({required this.event});
+
+  IconData get _icon {
+    switch (event.type) {
+      case ServerEvent.nodeJoined:
+        return Icons.add_circle_outline;
+      case ServerEvent.nodeLeft:
+        return Icons.remove_circle_outline;
+      case ServerEvent.nodeStatusChanged:
+        return Icons.swap_horiz;
+      case ServerEvent.clusterCreated:
+        return Icons.cloud;
+      case ServerEvent.clusterDeleted:
+        return Icons.cloud_off;
+      case ServerEvent.metricsUpdate:
+        return Icons.show_chart;
+      default:
+        return Icons.info_outline;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Expanded(
-      child: Card(
-        child: Padding(
-          padding: UIConstants.paddingLG,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(icon, color: color, size: UIConstants.iconXL),
-              const SizedBox(height: UIConstants.spacingSM),
-              Text(value, style: theme.textTheme.headlineMedium),
-              Text(label, style: theme.textTheme.bodySmall),
-            ],
-          ),
-        ),
+    final time =
+        '${event.timestamp.hour.toString().padLeft(2, '0')}:${event.timestamp.minute.toString().padLeft(2, '0')}:${event.timestamp.second.toString().padLeft(2, '0')}';
+
+    return ListTile(
+      dense: true,
+      leading: Icon(_icon, size: UIConstants.iconMD),
+      title: Text(
+        event.type.replaceAll('_', ' ').toUpperCase(),
+        style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
       ),
+      subtitle: Text(
+        event.nodeId ?? event.clusterId ?? '',
+        style: theme.textTheme.labelSmall,
+      ),
+      trailing: Text(time, style: theme.textTheme.labelSmall),
     );
   }
 }
@@ -277,6 +366,8 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
       },
       onActionPressed: (value) {
         ref.read(serverUrlProvider.notifier).state = value;
+        // Persist to Hive so it survives restart.
+        ref.read(localStorageProvider).setServerUrl(value);
         NotificationToast.success(context, 'Server URL updated');
       },
     );
@@ -296,10 +387,7 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
 
           // --- Account section ---
           Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24,
-              vertical: 8,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
             child: Text(
               'Account',
               style: theme.textTheme.titleSmall?.copyWith(
@@ -341,6 +429,31 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
                         ),
+                        if (authState.user!.role != 'viewer')
+                          Padding(
+                            padding: const EdgeInsets.only(
+                              top: UIConstants.spacingXS,
+                            ),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: UIConstants.spacingSM,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.primaryContainer,
+                                borderRadius: BorderRadius.circular(
+                                  UIConstants.radiusSmall,
+                                ),
+                              ),
+                              child: Text(
+                                authState.user!.role.toUpperCase(),
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.colorScheme.onPrimaryContainer,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -358,10 +471,7 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
 
           // --- Server section ---
           Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24,
-              vertical: 8,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
             child: Text(
               'Server',
               style: theme.textTheme.titleSmall?.copyWith(
@@ -389,10 +499,7 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
 
           // --- About section ---
           Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24,
-              vertical: 8,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
             child: Text(
               'About',
               style: theme.textTheme.titleSmall?.copyWith(
@@ -408,7 +515,8 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
               AppAlertDialog.showInfo(
                 context: context,
                 title: 'NEBULA Admin',
-                message: 'Version 0.1.0+1\nDistributed compute cluster dashboard.',
+                message:
+                    'Version 0.1.0+1\nDistributed compute cluster dashboard.',
               );
             },
           ),
