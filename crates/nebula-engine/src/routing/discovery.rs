@@ -9,9 +9,9 @@ pub const MDNS_SERVICE_NAME: &str = "_nebula._tcp.local.";
 /// Manages mDNS service registration and discovery for LAN peers.
 ///
 /// This is currently a data structure that tracks discovered peers.
-/// Actual mDNS broadcast/listen integration (via the `mdns-sd` crate)
-/// will be wired in a future phase. For now, peers are added manually
-/// via `add_discovered_peer` or through MQTT signaling.
+/// Peers are added via `add_discovered_peer` or through MQTT signaling.
+/// mDNS broadcast/listen integration (via the `mdns-sd` crate) is planned
+/// for Sprint 8+ (advanced features).
 ///
 /// TXT records carried by the mDNS service:
 /// - `cluster_id={id}` -- the cluster this node belongs to

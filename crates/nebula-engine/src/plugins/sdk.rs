@@ -21,6 +21,12 @@ pub struct EngineHandle {
         Arc<dyn Fn(String, String, Vec<u8>) -> Result<Vec<u8>, String> + Send + Sync>,
     /// Invoke an engine system command.
     pub engine_invoke: Arc<dyn Fn(String, Vec<u8>) -> Result<Vec<u8>, String> + Send + Sync>,
+    /// Report task progress (0-100). Returns 0 on success, -1 on error.
+    pub task_progress: Arc<dyn Fn(String, u8) -> i32 + Send + Sync>,
+    /// Report task completion with result data. Returns 0 on success, -1 on error.
+    pub task_complete: Arc<dyn Fn(String, Vec<u8>) -> i32 + Send + Sync>,
+    /// Report task failure with error message. Returns 0 on success, -1 on error.
+    pub task_failed: Arc<dyn Fn(String, String) -> i32 + Send + Sync>,
 }
 
 static ENGINE_HANDLE: OnceLock<EngineHandle> = OnceLock::new();
@@ -212,31 +218,76 @@ extern "C" fn cb_subscribe(
 
 extern "C" fn cb_report_task_progress(
     _host: *mut std::ffi::c_void,
-    _task_id_ptr: *const u8,
-    _task_id_len: usize,
-    _progress: u8,
+    task_id_ptr: *const u8,
+    task_id_len: usize,
+    progress: u8,
 ) -> i32 {
-    -1
+    let Some(handle) = ENGINE_HANDLE.get() else {
+        return -1;
+    };
+    let task_id_bytes = match unsafe { slice_from_raw(task_id_ptr, task_id_len) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let task_id = match std::str::from_utf8(task_id_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    (handle.task_progress)(task_id.to_string(), progress)
 }
 
 extern "C" fn cb_report_task_complete(
     _host: *mut std::ffi::c_void,
-    _task_id_ptr: *const u8,
-    _task_id_len: usize,
-    _result_ptr: *const u8,
-    _result_len: usize,
+    task_id_ptr: *const u8,
+    task_id_len: usize,
+    result_ptr: *const u8,
+    result_len: usize,
 ) -> i32 {
-    -1
+    let Some(handle) = ENGINE_HANDLE.get() else {
+        return -1;
+    };
+    let task_id_bytes = match unsafe { slice_from_raw(task_id_ptr, task_id_len) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let result_bytes = match unsafe { slice_from_raw(result_ptr, result_len) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let task_id = match std::str::from_utf8(task_id_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    (handle.task_complete)(task_id.to_string(), result_bytes.to_vec())
 }
 
 extern "C" fn cb_report_task_failed(
     _host: *mut std::ffi::c_void,
-    _task_id_ptr: *const u8,
-    _task_id_len: usize,
-    _error_ptr: *const u8,
-    _error_len: usize,
+    task_id_ptr: *const u8,
+    task_id_len: usize,
+    error_ptr: *const u8,
+    error_len: usize,
 ) -> i32 {
-    -1
+    let Some(handle) = ENGINE_HANDLE.get() else {
+        return -1;
+    };
+    let task_id_bytes = match unsafe { slice_from_raw(task_id_ptr, task_id_len) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let error_bytes = match unsafe { slice_from_raw(error_ptr, error_len) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let task_id = match std::str::from_utf8(task_id_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let error_msg = match std::str::from_utf8(error_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    (handle.task_failed)(task_id.to_string(), error_msg.to_string())
 }
 
 extern "C" fn cb_platform_invoke(
@@ -410,6 +461,9 @@ mod tests {
                         Err(format!("Unknown command: {command}"))
                     }
                 }),
+                task_progress: Arc::new(|_task_id, _progress| 0),
+                task_complete: Arc::new(|_task_id, _result| 0),
+                task_failed: Arc::new(|_task_id, _error| 0),
             });
         });
     }

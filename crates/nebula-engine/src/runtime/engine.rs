@@ -465,9 +465,100 @@ impl NebulaEngine {
                     .map_err(|e| format!("Registry lock poisoned: {e}"))?;
                 registry.invoke_plugin(&plugin_id, &action, &payload)
             }),
-            engine_invoke: Arc::new(|command, _payload| {
-                Err(format!("Engine command not yet implemented: {command}"))
-            }),
+            engine_invoke: {
+                let state = Arc::clone(&self.state);
+                let identity_node_id = self.identity.node_id().to_string();
+                let identity_cluster = self.identity.cluster_id().unwrap_or_default().to_string();
+                let membership = Arc::clone(&self.membership);
+                let started_at = self.started_at;
+                let storage = Arc::clone(&self.storage);
+                Arc::new(move |command: String, _payload: Vec<u8>| {
+                    match command.as_str() {
+                        "status" => {
+                            let st = state.try_read().map_err(|e| format!("lock: {e}"))?;
+                            Ok(serde_json::json!({
+                                "node_id": identity_node_id,
+                                "cluster_id": identity_cluster,
+                                "state": st.display_name(),
+                                "uptime_secs": started_at.elapsed().as_secs(),
+                            }).to_string().into_bytes())
+                        }
+                        "metrics" => {
+                            let m = membership.read().map_err(|e| format!("lock: {e}"))?;
+                            let members = m.get_members();
+                            let count = members.len();
+                            Ok(serde_json::json!({
+                                "member_count": count,
+                                "uptime_secs": started_at.elapsed().as_secs(),
+                            }).to_string().into_bytes())
+                        }
+                        "succession" => {
+                            match storage.get_succession_line(&identity_cluster) {
+                                Ok(Some(rec)) => Ok(rec.succession_json.into_bytes()),
+                                Ok(None) => Ok(b"[]".to_vec()),
+                                Err(e) => Err(format!("storage error: {e}")),
+                            }
+                        }
+                        "config" => {
+                            Ok(serde_json::json!({
+                                "node_id": identity_node_id,
+                                "cluster_id": identity_cluster,
+                            }).to_string().into_bytes())
+                        }
+                        other => Err(format!("Unknown engine command: {other}")),
+                    }
+                })
+            },
+            task_progress: {
+                let storage = Arc::clone(&self.storage);
+                let event_bus = self.event_bus();
+                Arc::new(move |task_id: String, progress: u8| {
+                    // Update task in storage and emit event
+                    if let Ok(Some(task)) = storage.get_task(&task_id) {
+                        let mut updated = task.clone();
+                        // Store progress in payload_json as a simple update
+                        updated.payload_json = format!(r#"{{"progress":{}}}"#, progress);
+                        let _ = storage.update_task(task, updated);
+                    }
+                    event_bus.publish(crate::api::events::EngineEvent::TaskUpdate {
+                        task_id, status: format!("progress:{}", progress),
+                    });
+                    0
+                })
+            },
+            task_complete: {
+                let storage = Arc::clone(&self.storage);
+                let event_bus = self.event_bus();
+                Arc::new(move |task_id: String, _result_data: Vec<u8>| {
+                    if let Ok(Some(task)) = storage.get_task(&task_id) {
+                        let mut updated = task.clone();
+                        updated.status = "completed".to_string();
+                        updated.completed_at = Some(chrono::Utc::now().timestamp());
+                        let _ = storage.update_task(task, updated);
+                    }
+                    event_bus.publish(crate::api::events::EngineEvent::TaskUpdate {
+                        task_id, status: "completed".to_string(),
+                    });
+                    0
+                })
+            },
+            task_failed: {
+                let storage = Arc::clone(&self.storage);
+                let event_bus = self.event_bus();
+                Arc::new(move |task_id: String, error_msg: String| {
+                    if let Ok(Some(task)) = storage.get_task(&task_id) {
+                        let mut updated = task.clone();
+                        updated.status = "failed".to_string();
+                        updated.error_message = Some(error_msg.clone());
+                        updated.completed_at = Some(chrono::Utc::now().timestamp());
+                        let _ = storage.update_task(task, updated);
+                    }
+                    event_bus.publish(crate::api::events::EngineEvent::TaskUpdate {
+                        task_id, status: format!("failed:{}", error_msg),
+                    });
+                    0
+                })
+            },
         });
     }
 
