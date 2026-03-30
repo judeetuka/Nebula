@@ -48,11 +48,8 @@ pub struct PluginContext {
 
     /// Remove a key from the plugin's key-value store.
     /// Returns 0 on success (even if the key did not exist), -1 on error.
-    pub delete_state: extern "C" fn(
-        host: *mut std::ffi::c_void,
-        key_ptr: *const u8,
-        key_len: usize,
-    ) -> i32,
+    pub delete_state:
+        extern "C" fn(host: *mut std::ffi::c_void, key_ptr: *const u8, key_len: usize) -> i32,
 
     // -- Logging ------------------------------------------------------------
     /// Emit a log message. `level` follows tracing conventions:
@@ -78,11 +75,8 @@ pub struct PluginContext {
 
     /// Subscribe to an MQTT topic.
     /// Returns 0 on success, -1 on error.
-    pub subscribe: extern "C" fn(
-        host: *mut std::ffi::c_void,
-        topic_ptr: *const u8,
-        topic_len: usize,
-    ) -> i32,
+    pub subscribe:
+        extern "C" fn(host: *mut std::ffi::c_void, topic_ptr: *const u8, topic_len: usize) -> i32,
 
     // -- Task management ----------------------------------------------------
     /// Report incremental progress on a task (0-100).

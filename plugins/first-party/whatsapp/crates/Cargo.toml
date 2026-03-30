@@ -1,0 +1,53 @@
+[package]
+name = "whatsapp-client"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+description = "Rust client for WhatsApp Web"
+
+[features]
+debug-snapshots = []
+danger-skip-tls-verify = ["whatsapp-rust-tokio-transport?/danger-skip-tls-verify"]
+default = ["sqlite-storage", "tokio-transport", "ureq-client", "tokio-native"]
+ureq-client = ["dep:whatsapp-rust-ureq-http-client"]
+tokio-transport = ["dep:whatsapp-rust-tokio-transport"]
+signal = ["tokio/signal"]
+sqlite-storage = ["whatsapp-rust-sqlite-storage"]
+tokio-native = ["tokio/rt-multi-thread"]
+
+[dependencies]
+anyhow = { workspace = true }
+async-channel = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
+dashmap = "6.1.0"
+env_logger = { version = "0.11", default-features = false }
+hex = { workspace = true }
+log = { workspace = true }
+moka = { version = "0.12.12", features = ["future"] }
+prost = { workspace = true }
+rand = { workspace = true }
+rand_core = { workspace = true }
+scopeguard = "1.2"
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["std"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time", "net", "fs", "io-util"] }
+aes = { workspace = true }
+aes-gcm = { workspace = true }
+ctr = { workspace = true }
+hkdf = { workspace = true }
+hmac = { workspace = true }
+sha1 = { workspace = true }
+sha2 = { workspace = true }
+wacore = { workspace = true }
+wacore-binary = { workspace = true }
+waproto = { workspace = true }
+whatsapp-rust-sqlite-storage = { path = "./storages/sqlite-storage", version = "0.2.0", optional = true }
+whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.2.0", optional = true }
+whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version = "0.2.0", optional = true }
+
+[dev-dependencies]
+uuid = { version = "1.0", features = ["v4"] }

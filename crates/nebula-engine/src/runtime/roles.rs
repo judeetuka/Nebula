@@ -4,7 +4,30 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use anyhow::{bail, Result};
 use tokio::sync::RwLock;
-use crate::peer::discovery::{NodeCapabilities, NodeRole};
+use serde::{Deserialize, Serialize};
+
+/// A service role that a node can provide to the cluster.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum NodeRole {
+    Master,
+    Worker,
+    Database,
+    FileHost,
+    Gateway,
+    Relay,
+    Custom(String),
+}
+
+/// Capabilities announced by a node to the cluster via MQTT.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeCapabilities {
+    pub node_id: String,
+    pub roles: Vec<NodeRole>,
+    pub peer_address: String,
+    pub peer_port: u16,
+    pub capacity: f32,
+    pub version: String,
+}
 
 /// Trait for implementing a service that responds to data requests.
 pub trait ServiceHandler: Send + Sync {

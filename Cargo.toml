@@ -20,6 +20,8 @@ exclude = [
     "plugins/first-party/contacts",
     "plugins/first-party/classifier",
     "plugins/first-party/payment-processor",
+    "plugins/first-party/linux-bridge",
+    "plugins/first-party/whatsapp",
 ]
 
 [workspace.package]

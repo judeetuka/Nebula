@@ -31,6 +31,9 @@ pem = "3"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
 
 rusqlite = { version = "0.32", features = ["bundled-sqlcipher"] }
+srt-tokio = "0.4"
+bytes.workspace = true
+futures = "0.3"
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { version = "0.21", default-features = false }

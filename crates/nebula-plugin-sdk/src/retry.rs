@@ -69,8 +69,7 @@ impl RetryPolicy {
     ///
     /// Includes deterministic jitter (up to 10% of the base delay).
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
-        let base =
-            (self.initial_delay_ms as f64) * self.backoff_multiplier.powi(attempt as i32);
+        let base = (self.initial_delay_ms as f64) * self.backoff_multiplier.powi(attempt as i32);
         let clamped = base.min(self.max_delay_ms as f64) as u64;
 
         // Deterministic jitter: up to 10% based on attempt number.

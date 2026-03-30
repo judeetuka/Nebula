@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use nebula_core::identity::node_id::NodeId;
 use nebula_core::identity::roles::NodeRole;
-use nebula_engine::cluster::failover::{FailoverConfig, FailoverCoordinator, PeerHealthReport};
+use nebula_engine::cluster::failover::{
+    FailoverConfig, FailoverCoordinator, FailoverState, PromotionNotice,
+};
 use nebula_engine::cluster::membership::MemberInfo;
 use nebula_engine::cluster::membership::{ClusterMembership, NodeMetrics};
 use nebula_engine::cluster::rotation::{compute_master_score, RotationManager};
@@ -23,8 +25,8 @@ fn make_metrics(battery: u8, cpu: f32, mem: u32, tasks: u16, uptime: u64) -> Nod
     }
 }
 
-fn drive_to_huddle(c: &mut FailoverCoordinator) {
-    c.check_master_timeout();
+fn drive_to_reported(c: &mut FailoverCoordinator) {
+    c.mqtt_connection_lost();
     thread::sleep(Duration::from_millis(5));
     c.check_master_timeout();
     thread::sleep(Duration::from_millis(5));
@@ -137,7 +139,7 @@ fn test_succession_line_computation_with_full_cluster() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_failover_scenario_master_death() {
+fn test_failover_scenario_server_mediated() {
     let config = FailoverConfig {
         master_timeout: Duration::from_millis(1),
         grace_period: Duration::from_millis(1),
@@ -147,39 +149,27 @@ fn test_failover_scenario_master_death() {
     let mut coord = FailoverCoordinator::new("node-a", config);
     coord.update_local_metrics(make_metrics(95, 0.1, 4096, 0, 300), 100);
 
-    // Simulate master death -- never call master_heartbeat_received
-    drive_to_huddle(&mut coord);
+    // Simulate master MQTT broker disconnect -> timeout -> grace -> reported to server
+    drive_to_reported(&mut coord);
+    assert!(matches!(
+        *coord.state(),
+        FailoverState::ReportedToServer { .. }
+    ));
 
-    // Two other workers report their health
-    coord.record_peer_health(PeerHealthReport {
-        node_id: "node-b".into(),
-        score: compute_master_score(&make_metrics(50, 0.5, 1024, 10, 7200)) as f32,
-        battery_level: 50,
-        cpu_load: 0.5,
-        memory_available_mb: 1024,
-        active_tasks: 10,
-        join_time: 50,
-    });
-    coord.record_peer_health(PeerHealthReport {
-        node_id: "node-c".into(),
-        score: compute_master_score(&make_metrics(60, 0.4, 2048, 5, 3600)) as f32,
-        battery_level: 60,
-        cpu_load: 0.4,
-        memory_available_mb: 2048,
-        active_tasks: 5,
-        join_time: 80,
-    });
+    // Build timeout report to send to server
+    let report = coord.build_timeout_report("cluster-1").unwrap();
+    assert_eq!(report.reporter_node_id, "node-a");
+    assert_eq!(report.reporter_battery, 95);
+    assert_eq!(report.cluster_id, "cluster-1");
 
-    // node-a has the best metrics (95 battery, 0.1 cpu)
-    assert!(
-        coord.should_claim_promotion(),
-        "node-a should win promotion"
-    );
-    // Deterministic: same inputs -> same result
-    assert!(
-        coord.should_claim_promotion(),
-        "result should be deterministic"
-    );
+    // Server picks this node as the new master and sends PromotionNotice
+    coord.handle_promotion_notice(&PromotionNotice {
+        cluster_id: "cluster-1".into(),
+        new_master_id: "node-a".into(),
+        new_master_mqtt_host: Some("10.0.0.1".into()),
+        new_master_mqtt_port: Some(1883),
+    });
+    assert_eq!(*coord.state(), FailoverState::PromotedByServer);
 }
 
 // ---------------------------------------------------------------------------

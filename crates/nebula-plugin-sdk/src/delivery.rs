@@ -179,10 +179,7 @@ mod tests {
     fn test_register_sets_submitted() {
         let mut tracker = DeliveryTracker::new(Duration::from_secs(300));
         tracker.register("msg1", 1);
-        assert_eq!(
-            tracker.get_status("msg1"),
-            Some(&DeliveryStatus::Submitted)
-        );
+        assert_eq!(tracker.get_status("msg1"), Some(&DeliveryStatus::Submitted));
     }
 
     #[test]
@@ -199,10 +196,7 @@ mod tests {
         tracker.register("msg1", 1);
         tracker.mark_part_sent("msg1");
         tracker.mark_part_delivered("msg1");
-        assert_eq!(
-            tracker.get_status("msg1"),
-            Some(&DeliveryStatus::Delivered)
-        );
+        assert_eq!(tracker.get_status("msg1"), Some(&DeliveryStatus::Delivered));
     }
 
     #[test]
@@ -213,19 +207,13 @@ mod tests {
         tracker.mark_part_sent("msg1");
         assert_eq!(
             tracker.get_status("msg1"),
-            Some(&DeliveryStatus::PartiallySent {
-                sent: 1,
-                total: 3
-            })
+            Some(&DeliveryStatus::PartiallySent { sent: 1, total: 3 })
         );
 
         tracker.mark_part_sent("msg1");
         assert_eq!(
             tracker.get_status("msg1"),
-            Some(&DeliveryStatus::PartiallySent {
-                sent: 2,
-                total: 3
-            })
+            Some(&DeliveryStatus::PartiallySent { sent: 2, total: 3 })
         );
 
         tracker.mark_part_sent("msg1");
@@ -250,10 +238,7 @@ mod tests {
         );
 
         tracker.mark_part_delivered("msg1");
-        assert_eq!(
-            tracker.get_status("msg1"),
-            Some(&DeliveryStatus::Delivered)
-        );
+        assert_eq!(tracker.get_status("msg1"), Some(&DeliveryStatus::Delivered));
     }
 
     #[test]
@@ -293,10 +278,7 @@ mod tests {
 
         let timed_out = tracker.check_timeouts();
         assert_eq!(timed_out, vec!["msg1"]);
-        assert_eq!(
-            tracker.get_status("msg1"),
-            Some(&DeliveryStatus::TimedOut)
-        );
+        assert_eq!(tracker.get_status("msg1"), Some(&DeliveryStatus::TimedOut));
     }
 
     #[test]
@@ -309,10 +291,7 @@ mod tests {
 
         let timed_out = tracker.check_timeouts();
         assert!(timed_out.is_empty());
-        assert_eq!(
-            tracker.get_status("msg1"),
-            Some(&DeliveryStatus::Delivered)
-        );
+        assert_eq!(tracker.get_status("msg1"), Some(&DeliveryStatus::Delivered));
     }
 
     #[test]
@@ -399,9 +378,6 @@ mod tests {
         tracker.check_timeouts();
 
         tracker.mark_part_sent("msg1");
-        assert_eq!(
-            tracker.get_status("msg1"),
-            Some(&DeliveryStatus::TimedOut)
-        );
+        assert_eq!(tracker.get_status("msg1"), Some(&DeliveryStatus::TimedOut));
     }
 }

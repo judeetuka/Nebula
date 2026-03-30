@@ -226,6 +226,42 @@ pub async fn get_current_user(req: axum::http::Request<axum::body::Body>) -> imp
     }
 }
 
+/// POST /api/clusters/:id/failover -- worker reports master timeout
+#[derive(serde::Deserialize)]
+pub struct MasterTimeoutReport {
+    pub reporter_node_id: String,
+    pub reporter_battery: u8,
+    pub reporter_cpu_load: f32,
+    pub reporter_memory_mb: u32,
+    pub reporter_active_tasks: u16,
+    pub reporter_uptime_secs: u64,
+}
+
+pub async fn report_master_timeout(
+    State(state): State<AppState>,
+    Path(cluster_id): Path<String>,
+    Json(report): Json<MasterTimeoutReport>,
+) -> impl IntoResponse {
+    // For now, pick the reporting node as the new master (simplistic).
+    // In production, the server would collect reports from multiple workers
+    // and pick the highest-scored one.
+    let new_master_id = report.reporter_node_id.clone();
+
+    // Broadcast the failover event via WebSocket
+    state.event_broadcaster.publish(super::websocket::ServerEvent::MasterFailover {
+        cluster_id: cluster_id.clone(),
+        old_master: None,
+        new_master: new_master_id.clone(),
+    });
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "status": "failover_initiated",
+        "cluster_id": cluster_id,
+        "new_master": new_master_id,
+        "reporter": report.reporter_node_id,
+    })))
+}
+
 /// DELETE /api/clusters/:id
 pub async fn delete_cluster(
     State(state): State<AppState>,

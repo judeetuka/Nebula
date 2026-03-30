@@ -1,0 +1,15 @@
+[package]
+name = "waproto"
+version = "0.2.0"
+edition = "2024"
+authors = ["HexiCore <hexicore.dev@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/HexiCore-dev/Nebula"
+description = "Protocol Buffers definitions for WhatsApp"
+
+[dependencies]
+prost = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }

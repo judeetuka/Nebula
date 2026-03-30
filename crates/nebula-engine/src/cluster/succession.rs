@@ -1,8 +1,16 @@
 use crate::cluster::membership::{ClusterMembership, NodeMetrics};
 use crate::cluster::rotation::compute_master_score;
-use crate::peer::protocol::SuccessionEntry;
 use nebula_core::identity::node_id::NodeId;
 use serde::{Deserialize, Serialize};
+
+/// A single entry in the succession line.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SuccessionEntry {
+    pub node_id: String,
+    pub score: f32,
+    pub rank: u32,
+    pub eligible: bool,
+}
 
 /// Health thresholds for succession eligibility.
 pub struct HealthThresholds {

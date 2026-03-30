@@ -15,6 +15,7 @@ pub enum ServerEvent {
     MasterRotated { cluster_id: String, old_master: String, new_master: String },
     PluginChanged { node_id: String, plugin_id: String, action: String },
     MetricsUpdate { node_id: String, battery: u8, cpu: f32, memory_mb: u32 },
+    MasterFailover { cluster_id: String, old_master: Option<String>, new_master: String },
     Heartbeat { timestamp: i64 },
 }
 

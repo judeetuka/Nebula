@@ -19,6 +19,11 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::get_rotation_status),
         )
         .route("/api/clusters/:id", delete(handlers::delete_cluster))
+        // Failover
+        .route(
+            "/api/clusters/:id/failover",
+            post(handlers::report_master_timeout),
+        )
         // Tasks
         .route("/api/clusters/:id/tasks", post(handlers::submit_task))
         // Plugins

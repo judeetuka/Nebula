@@ -958,7 +958,6 @@ mod tests {
         assert!(router.is_some());
 
         let router = router.as_ref().unwrap();
-        assert_eq!(router.lan_discovery().cluster_id(), "cluster-1");
         assert_eq!(router.tunnel_relay().server_url(), "wss://proxy.test");
 
         cleanup(&dir);
@@ -980,7 +979,7 @@ mod tests {
         assert!(router.is_some());
 
         let router = router.as_ref().unwrap();
-        assert_eq!(router.lan_discovery().cluster_id(), "cluster-99");
+        assert!(router.table().target_count() == 0); // freshly created router
 
         cleanup(&dir);
     }

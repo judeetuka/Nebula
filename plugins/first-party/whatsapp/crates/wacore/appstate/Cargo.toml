@@ -1,0 +1,29 @@
+[package]
+name = "wacore-appstate"
+version = "0.2.0"
+edition = "2024"
+authors = ["HexiCore <hexicore.dev@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/HexiCore-dev/Nebula"
+description = "Appstate for WhatsApp protocol"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow = { workspace = true }
+bytemuck = { workspace = true }
+hex = { workspace = true }
+hkdf = { workspace = true }
+log = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+serde-big-array = { workspace = true }
+serde_json = { workspace = true, features = ["alloc"] }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+wacore-binary = { workspace = true, features = ["serde"] }
+wacore-libsignal = { workspace = true }
+waproto = { workspace = true }
+
+[dev-dependencies]

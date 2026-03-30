@@ -189,7 +189,12 @@ impl RoutingTable {
     ///
     /// Also refreshes the probe timestamp. Returns `true` if the route was
     /// found and updated. Re-sorts routes for the target after the update.
-    pub fn update_latency(&mut self, target: &NodeId, method: &RouteMethod, latency_ms: u32) -> bool {
+    pub fn update_latency(
+        &mut self,
+        target: &NodeId,
+        method: &RouteMethod,
+        latency_ms: u32,
+    ) -> bool {
         if let Some(entries) = self.routes.get_mut(target) {
             if let Some(route) = entries.iter_mut().find(|r| r.method == *method) {
                 route.latency_ms = latency_ms;
