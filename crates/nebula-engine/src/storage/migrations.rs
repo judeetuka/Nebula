@@ -11,10 +11,11 @@ struct Migration {
 
 /// All migrations in order. NEVER remove or modify existing migrations.
 /// Only append new ones.
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "initial_schema",
-    sql: r#"
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial_schema",
+        sql: r#"
 -- Plugin state
 CREATE TABLE plugin_states (
     plugin_id TEXT PRIMARY KEY NOT NULL,
@@ -123,7 +124,19 @@ CREATE TABLE encrypted_blobs (
 );
 CREATE INDEX idx_encrypted_blobs_category ON encrypted_blobs(category);
 "#,
-}];
+    },
+    Migration {
+        version: 2,
+        name: "performance_indexes_and_limits",
+        sql: r#"
+-- Composite index for efficient task dequeue (PF-3)
+CREATE INDEX IF NOT EXISTS idx_task_queue_dequeue ON task_queue(status, priority DESC, submitted_at ASC);
+
+-- Index for heartbeat pruning by timestamp
+CREATE INDEX IF NOT EXISTS idx_heartbeats_prune ON heartbeats(timestamp);
+"#,
+    },
+];
 
 /// Apply all pending migrations to the database.
 ///

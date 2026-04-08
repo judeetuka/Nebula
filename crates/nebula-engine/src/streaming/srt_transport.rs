@@ -1,3 +1,6 @@
+//! SRT transport -- accessed via plugin SDK's `platform_invoke("engine:srt:*")`,
+//! not directly through FFI. All types are excluded from flutter_rust_bridge codegen.
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Instant;

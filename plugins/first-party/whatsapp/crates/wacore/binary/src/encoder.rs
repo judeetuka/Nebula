@@ -768,7 +768,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
             b'.' => 11,
             0 => 15,
             c if c.is_ascii_digit() => c - b'0',
-            _ => panic!("Invalid char for nibble packing: {value}"),
+            _ => unreachable!("Invalid char for nibble packing: {value} -- inputs must be pre-validated"),
         }
     }
 
@@ -778,7 +778,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
             c if c.is_ascii_digit() => c - b'0',
             c if (b'A'..=b'F').contains(&c) => 10 + (c - b'A'),
             0 => 15,
-            _ => panic!("Invalid char for hex packing: {value}"),
+            _ => unreachable!("Invalid char for hex packing: {value} -- inputs must be pre-validated"),
         }
     }
 
@@ -789,7 +789,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
 
     fn write_packed_bytes(&mut self, value: &str, data_type: u8) -> Result<()> {
         if value.len() > token::PACKED_MAX as usize {
-            panic!("String too long to be packed: {}", value.len());
+            return Err(anyhow::anyhow!("String too long to be packed: {} (max {})", value.len(), token::PACKED_MAX));
         }
 
         self.write_u8(data_type)?;

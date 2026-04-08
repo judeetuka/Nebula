@@ -14,7 +14,10 @@ class AuthRemoteSourceStub implements AuthRemoteSource {
   Future<User> signIn({required String email, required String password}) async {
     await Future<void>.delayed(const Duration(milliseconds: 500));
 
-    if (email == 'admin@nebula.io' && password == 'admin') {
+    // DEV ONLY: This stub is never used in production builds.
+    // Production uses AuthApiSource which talks to the server JWT endpoint.
+    if (email == 'dev@nebula.local' &&
+        password == 'dev-only-not-for-production') {
       _currentUser = User(
         uid: 'usr_001',
         email: email,

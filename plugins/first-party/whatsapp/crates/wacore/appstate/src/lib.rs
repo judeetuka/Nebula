@@ -1,4 +1,5 @@
 pub mod decode;
+pub mod encode;
 pub mod errors;
 pub mod hash;
 pub mod keys;
@@ -7,6 +8,7 @@ pub mod patch_decode;
 pub mod processor;
 
 pub use decode::{Mutation, collect_key_ids_from_patch_list, decode_record};
+pub use encode::{build_patch, compute_index_mac, encode_mutation};
 pub use errors::*;
 pub use keys::{ExpandedAppStateKeys, expand_app_state_keys};
 pub use lthash::{LTHash, WAPATCH_INTEGRITY};

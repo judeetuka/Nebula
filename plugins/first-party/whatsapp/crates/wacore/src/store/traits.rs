@@ -72,6 +72,19 @@ pub struct DeviceListRecord {
     pub phash: Option<String>,
 }
 
+/// A saved WhatsApp contact from app state sync.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContactEntry {
+    /// The JID (e.g., "2347012856059@s.whatsapp.net")
+    pub jid: String,
+    /// Full name (from phone's address book)
+    pub full_name: String,
+    /// First name (from phone's address book)
+    pub first_name: String,
+    /// Push name (self-chosen WhatsApp display name)
+    pub push_name: String,
+}
+
 /// Signal protocol cryptographic storage operations.
 ///
 /// Handles identity keys, sessions, pre-keys, signed pre-keys, and sender keys
@@ -152,6 +165,10 @@ pub trait AppSyncStore: Send + Sync {
 
     /// Set an app state sync key.
     async fn set_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()>;
+
+    /// Get the most recently stored app state sync key.
+    /// Returns (key_id, key) or None if no keys exist.
+    async fn get_latest_sync_key(&self) -> Result<Option<(Vec<u8>, AppStateSyncKey)>>;
 
     /// Get the app state version for a collection.
     async fn get_version(&self, name: &str) -> Result<HashState>;
@@ -254,6 +271,21 @@ pub trait ProtocolStore: Send + Sync {
 
     /// Delete tc tokens with token_timestamp older than cutoff. Returns count deleted.
     async fn delete_expired_tc_tokens(&self, cutoff_timestamp: i64) -> Result<u32>;
+
+    // --- Contact Storage ---
+
+    /// Store or update a contact from app state sync.
+    async fn put_contact(&self, jid: &str, full_name: &str, first_name: &str) -> Result<()>;
+
+    /// Update the push name for a contact (from incoming messages).
+    async fn put_contact_push_name(&self, jid: &str, push_name: &str) -> Result<()>;
+
+    /// Get all saved contacts (contacts with non-empty full_name or first_name).
+    /// These represent the phone's actual address book contacts on WhatsApp.
+    async fn get_saved_contacts(&self) -> Result<Vec<ContactEntry>>;
+
+    /// Get all contacts (including push-name-only entries).
+    async fn get_all_contacts(&self) -> Result<Vec<ContactEntry>>;
 }
 
 /// Device data persistence operations.

@@ -1,4 +1,6 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -21,6 +23,8 @@ pub struct AppState {
     pub db: Option<DatabaseConnection>,
     pub jwt_config: JwtConfig,
     pub event_broadcaster: Arc<EventBroadcaster>,
+    pub start_time: Instant,
+    pub mqtt_relay_running: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -31,6 +35,8 @@ impl AppState {
             db: None,
             jwt_config: JwtConfig::default(),
             event_broadcaster: Arc::new(EventBroadcaster::new()),
+            start_time: Instant::now(),
+            mqtt_relay_running: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -45,6 +51,8 @@ impl AppState {
             db: Some(db),
             jwt_config,
             event_broadcaster: Arc::new(EventBroadcaster::new()),
+            start_time: Instant::now(),
+            mqtt_relay_running: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -56,11 +64,15 @@ pub struct TriggerRotationRequest {
 }
 
 /// GET /api/health
-pub async fn health() -> impl IntoResponse {
+pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    let db_status = if state.db.is_some() { "connected" } else { "not_configured" };
+    let mqtt_status = if state.mqtt_relay_running.load(Ordering::Relaxed) { "running" } else { "not_started" };
     Json(serde_json::json!({
-        "status": "ok",
-        "service": "nebula-server",
+        "status": "healthy",
         "version": env!("CARGO_PKG_VERSION"),
+        "database": db_status,
+        "mqtt_relay": mqtt_status,
+        "uptime_secs": state.start_time.elapsed().as_secs(),
     }))
 }
 

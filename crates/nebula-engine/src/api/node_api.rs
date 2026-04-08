@@ -115,9 +115,9 @@ pub fn start_engine() -> Result<String, String> {
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
 
-        let role = rt.block_on(engine.connect_to_server()).map_err(|e| {
-            format!("Connection failed: {}", e)
-        })?;
+        let role = rt
+            .block_on(engine.connect_to_server())
+            .map_err(|e| format!("Connection failed: {}", e))?;
 
         Ok(format!("{}", role))
     })
@@ -165,8 +165,7 @@ pub fn get_cluster_members() -> Result<String, String> {
             })
             .collect();
 
-        serde_json::to_string(&members)
-            .map_err(|e| format!("Failed to serialize members: {}", e))
+        serde_json::to_string(&members).map_err(|e| format!("Failed to serialize members: {}", e))
     })
 }
 
@@ -223,8 +222,7 @@ pub fn get_cluster_topology() -> Result<String, String> {
             }
         };
 
-        serde_json::to_string(&json)
-            .map_err(|e| format!("Failed to serialize topology: {}", e))
+        serde_json::to_string(&json).map_err(|e| format!("Failed to serialize topology: {}", e))
     })
 }
 
@@ -252,12 +250,8 @@ pub fn get_routing_table() -> Result<String, String> {
                 .iter()
                 .map(|(target, method)| {
                     let (method_name, addr) = match method {
-                        RouteMethod::LanDirect { addr } => {
-                            ("LanDirect", Some(addr.to_string()))
-                        }
-                        RouteMethod::HolePunch { addr } => {
-                            ("HolePunch", Some(addr.to_string()))
-                        }
+                        RouteMethod::LanDirect { addr } => ("LanDirect", Some(addr.to_string())),
+                        RouteMethod::HolePunch { addr } => ("HolePunch", Some(addr.to_string())),
                         RouteMethod::TunnelRelay => ("TunnelRelay", None),
                     };
 

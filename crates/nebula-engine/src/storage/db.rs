@@ -386,9 +386,28 @@ impl StorageManager {
         }
     }
 
+    /// Delete heartbeat records older than `max_age_secs` seconds.
+    pub fn prune_heartbeats(&self, max_age_secs: i64) -> Result<usize> {
+        let cutoff = chrono::Utc::now().timestamp() - max_age_secs;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock: {}", e))?;
+        let deleted = conn
+            .execute(
+                "DELETE FROM heartbeats WHERE timestamp < ?1",
+                rusqlite::params![cutoff],
+            )
+            .context("prune heartbeats")?;
+        Ok(deleted)
+    }
+
     // -----------------------------------------------------------------------
     // MqttOfflineMessage CRUD
     // -----------------------------------------------------------------------
+
+    /// Maximum offline queue size. Oldest messages are dropped when exceeded.
+    const MAX_OFFLINE_QUEUE_SIZE: i64 = 1000;
 
     pub fn enqueue_offline_message(&self, msg: MqttOfflineMessage) -> Result<()> {
         let conn = self
@@ -399,9 +418,23 @@ impl StorageManager {
             "INSERT INTO mqtt_offline_queue (id, topic, payload, qos, queued_at, retry_count) VALUES (?1,?2,?3,?4,?5,?6)",
             rusqlite::params![msg.id, msg.topic, msg.payload_bytes, msg.qos as i32, msg.queued_at, msg.retry_count as i32],
         ).context("enqueue offline message")?;
+
+        // Enforce queue size limit: drop oldest messages when full.
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM mqtt_offline_queue", [], |r| r.get(0))
+            .unwrap_or(0);
+        if count > Self::MAX_OFFLINE_QUEUE_SIZE {
+            let excess = count - Self::MAX_OFFLINE_QUEUE_SIZE;
+            conn.execute(
+                "DELETE FROM mqtt_offline_queue WHERE id IN (SELECT id FROM mqtt_offline_queue ORDER BY queued_at ASC LIMIT ?1)",
+                rusqlite::params![excess],
+            ).context("prune offline queue")?;
+        }
+
         Ok(())
     }
 
+    /// Drain offline messages in batches (max 100 at a time) to avoid OOM.
     pub fn drain_offline_messages(&self) -> Result<Vec<MqttOfflineMessage>> {
         let conn = self
             .conn

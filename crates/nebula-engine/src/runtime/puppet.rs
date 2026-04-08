@@ -1,6 +1,6 @@
 //! Puppet mode controller for the master node.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -47,8 +47,8 @@ pub struct PuppetSession {
 /// Manages puppet mode from the master node.
 pub struct PuppetController {
     sessions: Arc<RwLock<HashMap<String, PuppetSession>>>,
-    action_history: Arc<RwLock<Vec<PuppetAction>>>,
-    result_history: Arc<RwLock<Vec<PuppetResult>>>,
+    action_history: Arc<RwLock<VecDeque<PuppetAction>>>,
+    result_history: Arc<RwLock<VecDeque<PuppetResult>>>,
     max_history: usize,
 }
 
@@ -56,8 +56,8 @@ impl PuppetController {
     pub fn new(max_history: usize) -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            action_history: Arc::new(RwLock::new(Vec::new())),
-            result_history: Arc::new(RwLock::new(Vec::new())),
+            action_history: Arc::new(RwLock::new(VecDeque::new())),
+            result_history: Arc::new(RwLock::new(VecDeque::new())),
             max_history,
         }
     }
@@ -97,15 +97,15 @@ impl PuppetController {
             }
         }
         let mut history = self.action_history.write().await;
-        history.push(action);
-        while history.len() > self.max_history { history.remove(0); }
+        history.push_back(action);
+        while history.len() > self.max_history { history.pop_front(); }
         Ok(())
     }
 
     pub async fn record_result(&self, result: PuppetResult) {
         let mut history = self.result_history.write().await;
-        history.push(result);
-        while history.len() > self.max_history { history.remove(0); }
+        history.push_back(result);
+        while history.len() > self.max_history { history.pop_front(); }
     }
 
     pub async fn active_sessions(&self) -> Vec<PuppetSession> {

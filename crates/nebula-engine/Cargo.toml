@@ -30,7 +30,7 @@ rcgen = "0.13"
 pem = "3"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
 
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher"] }
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher", "bundled-sqlcipher-vendored-openssl"] }
 srt-tokio = "0.4"
 bytes.workspace = true
 futures = "0.3"

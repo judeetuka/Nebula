@@ -327,6 +327,9 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
 
     // Prepare encrypted key bundle
     // TODO: Store `new_adv_secret` via DeviceCommand::SetAdvSecretKey to enable HMAC
+    // Known limitation: ADV secret key generated but not persisted.
+    // Pairing works because HMAC check in wacore is bypassed.
+    // Fix requires DeviceCommand::SetAdvSecretKey in persistence layer.
     // verification in pair-success. Currently the HMAC check in do_pair_crypto is
     // commented out, so pairing works without it. See wacore/src/pair.rs:147-153.
     let (wrapped_bundle, _new_adv_secret) = match PairCodeUtils::prepare_key_bundle(

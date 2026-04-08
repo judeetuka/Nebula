@@ -845,6 +845,36 @@ impl SqliteStore {
         }
     }
 
+    pub async fn get_latest_app_state_sync_key_for_device(
+        &self,
+        device_id: i32,
+    ) -> Result<Option<(Vec<u8>, AppStateSyncKey)>> {
+        let pool = self.pool.clone();
+        let res: Option<(Vec<u8>, Vec<u8>)> =
+            tokio::task::spawn_blocking(move || -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                let res: Option<(Vec<u8>, Vec<u8>)> = app_state_keys::table
+                    .select((app_state_keys::key_id, app_state_keys::key_data))
+                    .filter(app_state_keys::device_id.eq(device_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(res)
+            })
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))??;
+
+        if let Some((key_id, data)) = res {
+            let (key, _) = bincode::serde::decode_from_slice(&data, bincode::config::standard())
+                .map_err(|e| StoreError::Serialization(e.to_string()))?;
+            Ok(Some((key_id, key)))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn set_app_state_sync_key_for_device(
         &self,
         key_id: &[u8],
@@ -1281,6 +1311,11 @@ impl AppSyncStore for SqliteStore {
 
     async fn set_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()> {
         self.set_app_state_sync_key_for_device(key_id, key, self.device_id)
+            .await
+    }
+
+    async fn get_latest_sync_key(&self) -> Result<Option<(Vec<u8>, AppStateSyncKey)>> {
+        self.get_latest_app_state_sync_key_for_device(self.device_id)
             .await
     }
 
@@ -1920,6 +1955,149 @@ impl ProtocolStore for SqliteStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
+
+    // --- Contact Storage ---
+
+    async fn put_contact(&self, jid: &str, full_name: &str, first_name: &str) -> Result<()> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let jid = jid.to_string();
+        let full_name = full_name.to_string();
+        let first_name = first_name.to_string();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i32;
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::insert_into(contacts::table)
+                .values((
+                    contacts::jid.eq(&jid),
+                    contacts::full_name.eq(&full_name),
+                    contacts::first_name.eq(&first_name),
+                    contacts::device_id.eq(device_id),
+                    contacts::updated_at.eq(now),
+                ))
+                .on_conflict((contacts::jid, contacts::device_id))
+                .do_update()
+                .set((
+                    contacts::full_name.eq(&full_name),
+                    contacts::first_name.eq(&first_name),
+                    contacts::updated_at.eq(now),
+                ))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    async fn put_contact_push_name(&self, jid: &str, push_name: &str) -> Result<()> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let jid = jid.to_string();
+        let push_name = push_name.to_string();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i32;
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::insert_into(contacts::table)
+                .values((
+                    contacts::jid.eq(&jid),
+                    contacts::push_name.eq(&push_name),
+                    contacts::device_id.eq(device_id),
+                    contacts::updated_at.eq(now),
+                ))
+                .on_conflict((contacts::jid, contacts::device_id))
+                .do_update()
+                .set((
+                    contacts::push_name.eq(&push_name),
+                    contacts::updated_at.eq(now),
+                ))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    async fn get_saved_contacts(&self) -> Result<Vec<ContactEntry>> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        tokio::task::spawn_blocking(move || -> Result<Vec<ContactEntry>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let rows: Vec<(String, String, String, String)> = contacts::table
+                .select((
+                    contacts::jid,
+                    contacts::full_name,
+                    contacts::first_name,
+                    contacts::push_name,
+                ))
+                .filter(contacts::device_id.eq(device_id))
+                .filter(
+                    contacts::full_name
+                        .ne("")
+                        .or(contacts::first_name.ne("")),
+                )
+                .load(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(rows
+                .into_iter()
+                .map(|(jid, full_name, first_name, push_name)| ContactEntry {
+                    jid,
+                    full_name,
+                    first_name,
+                    push_name,
+                })
+                .collect())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    async fn get_all_contacts(&self) -> Result<Vec<ContactEntry>> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        tokio::task::spawn_blocking(move || -> Result<Vec<ContactEntry>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let rows: Vec<(String, String, String, String)> = contacts::table
+                .select((
+                    contacts::jid,
+                    contacts::full_name,
+                    contacts::first_name,
+                    contacts::push_name,
+                ))
+                .filter(contacts::device_id.eq(device_id))
+                .load(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(rows
+                .into_iter()
+                .map(|(jid, full_name, first_name, push_name)| ContactEntry {
+                    jid,
+                    full_name,
+                    first_name,
+                    push_name,
+                })
+                .collect())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
 }
 
 #[async_trait]

@@ -84,7 +84,8 @@ impl MqttClient {
     ) -> Result<Self> {
         let mut options = MqttOptions::new(client_id, host, port);
         options.set_keep_alive(std::time::Duration::from_secs(30));
-        options.set_clean_session(true);
+        // Use persistent sessions so subscriptions survive reconnection (fixes N-4).
+        options.set_clean_session(false);
         if let Some(tls) = tls_config {
             let transport = Transport::tls_with_config(TlsConfiguration::Rustls(tls));
             options.set_transport(transport);
@@ -182,6 +183,12 @@ impl MqttClient {
         self.event_loop.is_none()
     }
 
+    /// Returns a clone of the inner `AsyncClient` for use in spawned tasks.
+    /// `AsyncClient` is `Clone + Send + Sync`, making it safe for cross-task use.
+    pub fn async_client(&self) -> AsyncClient {
+        self.client.clone()
+    }
+
     /// Returns a reference to the handler registry (primarily for testing).
     pub fn handlers(&self) -> &Arc<RwLock<HashMap<String, MessageHandler>>> {
         &self.handlers
@@ -193,37 +200,81 @@ impl MqttClient {
 /// Incoming PUBLISH packets are dispatched to all registered handlers
 /// whose topic filter matches the message topic, and forwarded through
 /// the `mpsc` channel for external consumers.
+/// Maximum reconnection backoff (60 seconds).
+const MAX_RECONNECT_BACKOFF_SECS: u64 = 60;
+
+/// Maximum consecutive errors before giving up permanently.
+const MAX_CONSECUTIVE_ERRORS: u32 = 100;
+
 async fn drive_event_loop(
     mut event_loop: EventLoop,
     handlers: Arc<RwLock<HashMap<String, MessageHandler>>>,
     message_tx: mpsc::Sender<(String, Vec<u8>)>,
 ) {
+    let mut consecutive_errors: u32 = 0;
+    let mut backoff_secs: u64 = 1;
+
     loop {
         match event_loop.poll().await {
             Ok(Event::Incoming(Packet::Publish(publish))) => {
+                consecutive_errors = 0;
+                backoff_secs = 1;
+
                 let topic = publish.topic.clone();
                 let payload = publish.payload.to_vec();
 
-                // Dispatch to registered handlers.
-                if let Ok(handlers) = handlers.read() {
-                    for (filter, handler) in handlers.iter() {
-                        if topic_matches(filter, &topic) {
-                            handler(topic.clone(), payload.clone());
+                // Collect matching handlers synchronously (fast -- just HashMap lookup),
+                // then dispatch. Handlers are Arc<dyn Fn> so they're cheap to clone.
+                let matched: Vec<MessageHandler> = if let Ok(h) = handlers.read() {
+                    h.iter()
+                        .filter(|(f, _)| topic_matches(f, &topic))
+                        .map(|(_, handler)| Arc::clone(handler))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                // Dispatch handlers outside the lock via spawn (fixes PF-2).
+                if !matched.is_empty() {
+                    let t = topic.clone();
+                    let p = payload.clone();
+                    tokio::task::spawn_blocking(move || {
+                        for handler in matched {
+                            handler(t.clone(), p.clone());
                         }
-                    }
+                    });
                 }
 
-                // Forward through the channel for external consumers.
+                // Forward through channel.
                 if let Err(e) = message_tx.try_send((topic, payload)) {
-                    tracing::warn!(error = %e, "MQTT message channel full or closed, dropping message");
+                    tracing::warn!(error = %e, "MQTT message channel full, dropping");
                 }
             }
             Ok(_) => {
-                // Other events (ConnAck, SubAck, PingResp, etc.)
+                // ConnAck, SubAck, PingResp, etc. -- reset error counter.
+                consecutive_errors = 0;
+                backoff_secs = 1;
             }
             Err(e) => {
-                tracing::warn!(error = %e, "MQTT event loop error, stopping");
-                break;
+                consecutive_errors += 1;
+                tracing::warn!(
+                    error = %e,
+                    consecutive = consecutive_errors,
+                    backoff_secs = backoff_secs,
+                    "MQTT event loop error, will retry"
+                );
+
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                    tracing::error!("MQTT event loop: {} consecutive errors, giving up", consecutive_errors);
+                    break;
+                }
+
+                // Exponential backoff with cap
+                tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+                backoff_secs = (backoff_secs * 2).min(MAX_RECONNECT_BACKOFF_SECS);
+
+                // rumqttc will automatically attempt to reconnect on the next
+                // poll() call -- we just need to keep polling.
             }
         }
     }

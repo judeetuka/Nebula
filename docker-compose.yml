@@ -1,0 +1,38 @@
+services:
+  nebula-server:
+    build: .
+    ports:
+      - "8080:8080"
+      - "1884:1884"
+      - "2333:2333"
+    environment:
+      NEBULA_DATABASE_URL: "postgres://nebula:nebula_secret@postgres:5432/nebula"
+      JWT_SECRET: "${JWT_SECRET:-change-me-in-production}"
+      MQTT_PORT: "1884"
+      RUST_LOG: "info,nebula_server=info"
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: nebula
+      POSTGRES_USER: nebula
+      POSTGRES_PASSWORD: nebula_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nebula -d nebula"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pg_data:

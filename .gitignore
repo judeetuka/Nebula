@@ -27,6 +27,12 @@ Thumbs.db
 .env.*
 !.env.example
 
+# Playwright
+playwright-report/
+.playwright-*
+test-results/
+blob-report/
+
 # Generated
 **/frb_generated.*
 firebase-debug.log

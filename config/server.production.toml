@@ -1,0 +1,19 @@
+# NEBULA Server — Production Configuration
+# Environment: NEBULA_DATABASE_URL, JWT_SECRET, RUST_LOG
+
+[server]
+bind_addr = "0.0.0.0:2333"
+default_token = "CHANGE_ME_production_token"
+
+[server.transport]
+type = "tls"
+
+[server.transport.tls]
+hostname = "nebula.example.com"
+
+[api]
+bind_addr = "0.0.0.0:8080"
+
+[mqtt_relay]
+enabled = true
+port = 1884

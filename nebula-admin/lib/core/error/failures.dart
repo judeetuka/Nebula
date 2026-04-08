@@ -18,3 +18,7 @@ class ClusterFailure extends Failure {
 class ServerFailure extends Failure {
   const ServerFailure(super.message);
 }
+
+class WorkflowFailure extends Failure {
+  const WorkflowFailure(super.message);
+}

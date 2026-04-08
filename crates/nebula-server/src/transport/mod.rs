@@ -70,9 +70,11 @@ pub trait Transport: Debug + Send + Sync {
 mod tcp;
 pub use tcp::TcpTransport;
 
-// NOTE: TLS, Noise, and Websocket transports are not yet ported to nebula-server.
-// They require additional dependencies (tokio-native-tls, snowstorm, tokio-tungstenite)
-// that can be added when needed. The Transport trait is ready for them.
+mod tls;
+pub use tls::TlsTransport;
+
+// NOTE: Noise and Websocket transports are not yet ported.
+// The Transport trait is ready for them when needed.
 
 #[derive(Debug, Clone, Copy)]
 struct Keepalive {

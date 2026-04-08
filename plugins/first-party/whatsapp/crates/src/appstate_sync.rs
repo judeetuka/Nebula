@@ -341,7 +341,7 @@ mod tests {
     use wacore::libsignal::crypto::aes_256_cbc_encrypt_into;
     use wacore::store::error::Result as StoreResult;
     use wacore::store::traits::{
-        AppStateSyncKey, AppSyncStore, DeviceListRecord, DeviceStore, LidPnMappingEntry,
+        AppStateSyncKey, AppSyncStore, ContactEntry, DeviceListRecord, DeviceStore, LidPnMappingEntry,
         ProtocolStore, SignalStore,
     };
     use wacore_binary::jid::Jid;
@@ -526,6 +526,18 @@ mod tests {
         }
         async fn delete_expired_tc_tokens(&self, _: i64) -> StoreResult<u32> {
             Ok(0)
+        }
+        async fn put_contact(&self, _: &str, _: &str, _: &str) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn put_contact_push_name(&self, _: &str, _: &str) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn get_saved_contacts(&self) -> StoreResult<Vec<ContactEntry>> {
+            Ok(vec![])
+        }
+        async fn get_all_contacts(&self) -> StoreResult<Vec<ContactEntry>> {
+            Ok(vec![])
         }
     }
 

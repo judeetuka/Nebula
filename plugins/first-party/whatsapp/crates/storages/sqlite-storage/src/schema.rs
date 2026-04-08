@@ -37,6 +37,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    contacts (jid, device_id) {
+        jid -> Text,
+        full_name -> Text,
+        first_name -> Text,
+        push_name -> Text,
+        device_id -> Integer,
+        updated_at -> Integer,
+    }
+}
+
+diesel::table! {
     device_registry (user_id, device_id) {
         user_id -> Text,
         devices_json -> Text,
@@ -156,6 +167,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     app_state_mutation_macs,
     app_state_versions,
     base_keys,
+    contacts,
     device,
     device_registry,
     identities,

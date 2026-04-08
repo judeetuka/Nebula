@@ -21,6 +21,9 @@ dependencies:
   hive_ce_flutter: ^2.3.4
   fl_chart: ^0.69.0
   web_socket_channel: ^3.0.0
+  vyuh_node_flow: ^0.27.3
+  mobx: ^2.4.0
+  flutter_mobx: ^2.2.1
 
 dev_dependencies:
   flutter_test:

@@ -22,6 +22,17 @@ use jni::objects::{JClass, JObject, JString, JValue, JValueGen};
 use jni::sys::{jboolean, jint, jlong};
 use jni::JNIEnv;
 use jni::JavaVM;
+use std::sync::OnceLock;
+
+/// Global JVM reference, set during JNI_OnLoad or from Flutter's JNI_OnLoad.
+static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
+
+/// Store the JVM pointer. Called from `JNI_OnLoad` (via flutter_rust_bridge).
+pub fn set_jvm(vm: JavaVM) {
+    if JAVA_VM.set(vm).is_err() {
+        tracing::warn!("JVM already set, ignoring duplicate set_jvm call");
+    }
+}
 
 /// The fully-qualified JNI class path for the Kotlin bridge.
 const BRIDGE_CLASS: &str = "com/nebula/nebula_node/platform/NebulaPlatformBridge";
@@ -42,7 +53,11 @@ const BRIDGE_CLASS: &str = "com/nebula/nebula_node/platform/NebulaPlatformBridge
 ///
 /// Returns `Err` if the JVM cannot be found, the thread cannot attach, the
 /// bridge class is missing, or the method call itself fails.
-pub fn call_platform_bridge(service: &str, method: &str, args_json: &str) -> Result<String, String> {
+pub fn call_platform_bridge(
+    service: &str,
+    method: &str,
+    args_json: &str,
+) -> Result<String, String> {
     let jvm = get_jvm()?;
 
     // Attach the current native thread to the JVM. This is safe to call
@@ -59,12 +74,11 @@ pub fn call_platform_bridge(service: &str, method: &str, args_json: &str) -> Res
     route_call(&mut env, &class, service, method, args_json)
 }
 
-/// Obtain the single `JavaVM` instance that Android created.
-fn get_jvm() -> Result<JavaVM, String> {
-    let jvms = JavaVM::get_created_jvms().map_err(|e| format!("Failed to get JVM list: {e}"))?;
-    jvms.into_iter()
-        .next()
-        .ok_or_else(|| "No JVM found in this process".to_string())
+/// Obtain the stored JavaVM reference.
+fn get_jvm() -> Result<&'static JavaVM, String> {
+    JAVA_VM
+        .get()
+        .ok_or_else(|| "JVM not initialized -- set_jvm() was not called".to_string())
 }
 
 /// Route a `(service, method)` pair to the corresponding JNI call.
@@ -117,13 +131,9 @@ fn route_call(
                 &[JValue::Object(&code)],
             )
         }
-        ("telephony", "getPhoneState") => call_string_method(
-            env,
-            class,
-            "getPhoneState",
-            "()Ljava/lang/String;",
-            &[],
-        ),
+        ("telephony", "getPhoneState") => {
+            call_string_method(env, class, "getPhoneState", "()Ljava/lang/String;", &[])
+        }
 
         // =================================================================
         // USSD MULTI-STEP SESSION
@@ -286,13 +296,9 @@ fn route_call(
                 &[JValue::Object(&path)],
             )
         }
-        ("files", "getStorageInfo") => call_string_method(
-            env,
-            class,
-            "getStorageInfo",
-            "()Ljava/lang/String;",
-            &[],
-        ),
+        ("files", "getStorageInfo") => {
+            call_string_method(env, class, "getStorageInfo", "()Ljava/lang/String;", &[])
+        }
 
         // =================================================================
         // UI (Toast + Notification)
@@ -305,10 +311,7 @@ fn route_call(
                 class,
                 "showToast",
                 "(Ljava/lang/String;Z)Z",
-                &[
-                    JValue::Object(&message),
-                    JValue::Bool(jboolean::from(long)),
-                ],
+                &[JValue::Object(&message), JValue::Bool(jboolean::from(long))],
             )
         }
         ("ui", "showNotification") => {
@@ -334,13 +337,9 @@ fn route_call(
         ("accessibility", "isAccessibilityEnabled") => {
             call_bool_method(env, class, "isAccessibilityEnabled", "()Z", &[])
         }
-        ("accessibility", "getScreenContent") => call_string_method(
-            env,
-            class,
-            "getScreenContent",
-            "()Ljava/lang/String;",
-            &[],
-        ),
+        ("accessibility", "getScreenContent") => {
+            call_string_method(env, class, "getScreenContent", "()Ljava/lang/String;", &[])
+        }
         ("accessibility", "performClick") => {
             let node_id = jstring(env, args["nodeId"].as_str().unwrap_or(""))?;
             call_bool_method(
@@ -440,27 +439,15 @@ fn route_call(
         // =================================================================
         // DEVICE INFO
         // =================================================================
-        ("device", "getDeviceInfo") => call_string_method(
-            env,
-            class,
-            "getDeviceInfo",
-            "()Ljava/lang/String;",
-            &[],
-        ),
-        ("device", "getBatteryInfo") => call_string_method(
-            env,
-            class,
-            "getBatteryInfo",
-            "()Ljava/lang/String;",
-            &[],
-        ),
-        ("device", "getNetworkInfo") => call_string_method(
-            env,
-            class,
-            "getNetworkInfo",
-            "()Ljava/lang/String;",
-            &[],
-        ),
+        ("device", "getDeviceInfo") => {
+            call_string_method(env, class, "getDeviceInfo", "()Ljava/lang/String;", &[])
+        }
+        ("device", "getBatteryInfo") => {
+            call_string_method(env, class, "getBatteryInfo", "()Ljava/lang/String;", &[])
+        }
+        ("device", "getNetworkInfo") => {
+            call_string_method(env, class, "getNetworkInfo", "()Ljava/lang/String;", &[])
+        }
         ("device", "getDeviceSignature") => call_string_method(
             env,
             class,
@@ -497,13 +484,9 @@ fn route_call(
                 &[JValue::Object(&output_path), JValue::Object(&camera_id)],
             )
         }
-        ("camera", "listCameras") => call_string_method(
-            env,
-            class,
-            "listCameras",
-            "()Ljava/lang/String;",
-            &[],
-        ),
+        ("camera", "listCameras") => {
+            call_string_method(env, class, "listCameras", "()Ljava/lang/String;", &[])
+        }
 
         // =================================================================
         // AUDIO
@@ -516,22 +499,15 @@ fn route_call(
                 class,
                 "startAudioRecording",
                 "(Ljava/lang/String;J)Z",
-                &[
-                    JValue::Object(&output_path),
-                    JValue::Long(max_duration_ms),
-                ],
+                &[JValue::Object(&output_path), JValue::Long(max_duration_ms)],
             )
         }
         ("audio", "stopAudioRecording") => {
             call_bool_method(env, class, "stopAudioRecording", "()Z", &[])
         }
-        ("audio", "getVolume") => call_string_method(
-            env,
-            class,
-            "getVolume",
-            "()Ljava/lang/String;",
-            &[],
-        ),
+        ("audio", "getVolume") => {
+            call_string_method(env, class, "getVolume", "()Ljava/lang/String;", &[])
+        }
         ("audio", "setVolume") => {
             let stream = jstring(env, args["stream"].as_str().unwrap_or(""))?;
             let level = args["level"].as_i64().unwrap_or(0) as jint;
@@ -547,23 +523,13 @@ fn route_call(
         // =================================================================
         // WIFI
         // =================================================================
-        ("wifi", "getWifiInfo") => call_string_method(
-            env,
-            class,
-            "getWifiInfo",
-            "()Ljava/lang/String;",
-            &[],
-        ),
-        ("wifi", "scanWifiNetworks") => call_string_method(
-            env,
-            class,
-            "scanWifiNetworks",
-            "()Ljava/lang/String;",
-            &[],
-        ),
-        ("wifi", "isWifiEnabled") => {
-            call_bool_method(env, class, "isWifiEnabled", "()Z", &[])
+        ("wifi", "getWifiInfo") => {
+            call_string_method(env, class, "getWifiInfo", "()Ljava/lang/String;", &[])
         }
+        ("wifi", "scanWifiNetworks") => {
+            call_string_method(env, class, "scanWifiNetworks", "()Ljava/lang/String;", &[])
+        }
+        ("wifi", "isWifiEnabled") => call_bool_method(env, class, "isWifiEnabled", "()Z", &[]),
 
         // =================================================================
         // BLUETOOTH
@@ -589,13 +555,9 @@ fn route_call(
         // =================================================================
         // CLIPBOARD
         // =================================================================
-        ("clipboard", "getClipboard") => call_string_method(
-            env,
-            class,
-            "getClipboard",
-            "()Ljava/lang/String;",
-            &[],
-        ),
+        ("clipboard", "getClipboard") => {
+            call_string_method(env, class, "getClipboard", "()Ljava/lang/String;", &[])
+        }
         ("clipboard", "setClipboard") => {
             let text = jstring(env, args["text"].as_str().unwrap_or(""))?;
             call_bool_method(
@@ -610,13 +572,9 @@ fn route_call(
         // =================================================================
         // APP MANAGEMENT
         // =================================================================
-        ("apps", "listInstalledApps") => call_string_method(
-            env,
-            class,
-            "listInstalledApps",
-            "()Ljava/lang/String;",
-            &[],
-        ),
+        ("apps", "listInstalledApps") => {
+            call_string_method(env, class, "listInstalledApps", "()Ljava/lang/String;", &[])
+        }
         ("apps", "launchApp") => {
             let package_name = jstring(env, args["packageName"].as_str().unwrap_or(""))?;
             call_bool_method(
@@ -641,45 +599,25 @@ fn route_call(
         // =================================================================
         // SYSTEM / HARDWARE INFO
         // =================================================================
-        ("system", "getCpuInfo") => call_string_method(
-            env,
-            class,
-            "getCpuInfo",
-            "()Ljava/lang/String;",
-            &[],
-        ),
-        ("system", "getCpuTemperature") => call_string_method(
-            env,
-            class,
-            "getCpuTemperature",
-            "()Ljava/lang/String;",
-            &[],
-        ),
-        ("system", "getRamInfo") => call_string_method(
-            env,
-            class,
-            "getRamInfo",
-            "()Ljava/lang/String;",
-            &[],
-        ),
-        ("system", "getSensorList") => call_string_method(
-            env,
-            class,
-            "getSensorList",
-            "()Ljava/lang/String;",
-            &[],
-        ),
+        ("system", "getCpuInfo") => {
+            call_string_method(env, class, "getCpuInfo", "()Ljava/lang/String;", &[])
+        }
+        ("system", "getCpuTemperature") => {
+            call_string_method(env, class, "getCpuTemperature", "()Ljava/lang/String;", &[])
+        }
+        ("system", "getRamInfo") => {
+            call_string_method(env, class, "getRamInfo", "()Ljava/lang/String;", &[])
+        }
+        ("system", "getSensorList") => {
+            call_string_method(env, class, "getSensorList", "()Ljava/lang/String;", &[])
+        }
 
         // =================================================================
         // SIM INFO
         // =================================================================
-        ("sim", "getSimCards") => call_string_method(
-            env,
-            class,
-            "getSimCards",
-            "()Ljava/lang/String;",
-            &[],
-        ),
+        ("sim", "getSimCards") => {
+            call_string_method(env, class, "getSimCards", "()Ljava/lang/String;", &[])
+        }
         ("sim", "getSignalStrength") => {
             call_int_method(env, class, "getSignalStrength", "()I", &[])
         }
@@ -703,22 +641,12 @@ fn route_call(
         // =================================================================
         // SCREEN
         // =================================================================
-        ("screen", "getScreenInfo") => call_string_method(
-            env,
-            class,
-            "getScreenInfo",
-            "()Ljava/lang/String;",
-            &[],
-        ),
+        ("screen", "getScreenInfo") => {
+            call_string_method(env, class, "getScreenInfo", "()Ljava/lang/String;", &[])
+        }
         ("screen", "setBrightness") => {
             let level = args["level"].as_i64().unwrap_or(128) as jint;
-            call_bool_method(
-                env,
-                class,
-                "setBrightness",
-                "(I)Z",
-                &[JValue::Int(level)],
-            )
+            call_bool_method(env, class, "setBrightness", "(I)Z", &[JValue::Int(level)])
         }
 
         // =================================================================
@@ -777,16 +705,10 @@ fn route_call(
         // =================================================================
         // SMS RECEIVE QUEUE
         // =================================================================
-        ("sms", "getReceivedSms") => call_string_method(
-            env,
-            class,
-            "getReceivedSms",
-            "()Ljava/lang/String;",
-            &[],
-        ),
-        ("sms", "clearReceivedSms") => {
-            call_bool_method(env, class, "clearReceivedSms", "()Z", &[])
+        ("sms", "getReceivedSms") => {
+            call_string_method(env, class, "getReceivedSms", "()Ljava/lang/String;", &[])
         }
+        ("sms", "clearReceivedSms") => call_bool_method(env, class, "clearReceivedSms", "()Z", &[]),
 
         // =================================================================
         // CONTENT OBSERVERS
@@ -797,13 +719,9 @@ fn route_call(
         ("observer", "stopContentObserving") => {
             call_bool_method(env, class, "stopContentObserving", "()Z", &[])
         }
-        ("observer", "getContentChanges") => call_string_method(
-            env,
-            class,
-            "getContentChanges",
-            "()Ljava/lang/String;",
-            &[],
-        ),
+        ("observer", "getContentChanges") => {
+            call_string_method(env, class, "getContentChanges", "()Ljava/lang/String;", &[])
+        }
 
         // =================================================================
         // SCREEN CAPTURE
@@ -832,13 +750,9 @@ fn route_call(
         ("capture", "isScreenCaptureActive") => {
             call_bool_method(env, class, "isScreenCaptureActive", "()Z", &[])
         }
-        ("capture", "getScreenFrame") => call_bytearray_method(
-            env,
-            class,
-            "getScreenFrame",
-            "()[B",
-            &[],
-        ),
+        ("capture", "getScreenFrame") => {
+            call_bytearray_method(env, class, "getScreenFrame", "()[B", &[])
+        }
         ("capture", "getScreenCaptureConfig") => call_string_method(
             env,
             class,
@@ -863,9 +777,7 @@ fn route_call(
         // =================================================================
         // CATCH-ALL
         // =================================================================
-        _ => Err(format!(
-            "Unknown android method: {service}:{method}"
-        )),
+        _ => Err(format!("Unknown android method: {service}:{method}")),
     }
 }
 
@@ -1027,8 +939,7 @@ fn check_and_clear_exception(env: &mut JNIEnv) -> Result<(), String> {
 // Base64 helpers (no extra dependency -- simple RFC 4648 encode/decode)
 // =============================================================================
 
-const BASE64_CHARS: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const BASE64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// Encode bytes as base64 (standard alphabet with padding).
 fn base64_encode(data: &[u8]) -> String {

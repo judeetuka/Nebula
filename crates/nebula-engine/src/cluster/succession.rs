@@ -116,7 +116,6 @@ pub struct SuccessionLinePayload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cluster::rotation::compute_master_score;
     use nebula_core::identity::roles::NodeRole;
 
     fn make_metrics(battery: u8, cpu: f32, mem: u32, tasks: u16, uptime: u64) -> NodeMetrics {

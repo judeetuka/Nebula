@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["HexiCore <hexicore.dev@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/HexiCore-dev/Nebula"
-description = "Ureq-based HTTP client implementation for nebula-whatsapp"
+description = "Ureq-based HTTP client implementation for whatsapp-rust"
 
 [dependencies]
 anyhow = { workspace = true }

@@ -22,6 +22,7 @@ exclude = [
     "plugins/first-party/payment-processor",
     "plugins/first-party/linux-bridge",
     "plugins/first-party/whatsapp",
+    "plugins/first-party/screen-stream",
 ]
 
 [workspace.package]
@@ -45,10 +46,12 @@ uuid = { version = "1", features = ["v4", "serde"] }
 async-trait = "0.1"
 
 [profile.release]
-panic = "abort"
+# Use unwind (not abort) so catch_unwind() at the FFI boundary can
+# catch Rust panics and report them as errors instead of killing the app.
+panic = "unwind"
 lto = true
 codegen-units = 1
 strip = true
 
 [profile.dev]
-panic = "abort"
+panic = "unwind"

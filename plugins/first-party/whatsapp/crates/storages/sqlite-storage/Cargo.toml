@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["HexiCore <hexicore.dev@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/HexiCore-dev/Nebula"
-description = "SQLite storage backend for nebula-whatsapp"
+description = "SQLite storage backend for whatsapp-rust"
 
 [dependencies]
 async-trait = { workspace = true }

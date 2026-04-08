@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["HexiCore <hexicore.dev@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/HexiCore-dev/Nebula"
-description = "Tokio-based WebSocket transport for nebula-whatsapp"
+description = "Tokio-based WebSocket transport for whatsapp-rust"
 
 [features]
 default = []

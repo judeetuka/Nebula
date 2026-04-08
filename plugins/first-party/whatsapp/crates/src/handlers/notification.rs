@@ -52,8 +52,7 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
         }
         "server_sync" => {
             // Server sync notifications inform us of app state changes from other devices.
-            // For bot use case, we don't need to sync these (pins, mutes, archives, etc.).
-            // Just acknowledge without syncing.
+            // Fetch incremental patches to stay in sync (mutes, pins, archives, contacts, etc.).
             if let Some(children) = node.children() {
                 for collection_node in children.iter().filter(|c| c.tag == "collection") {
                     let name = collection_node
@@ -63,9 +62,35 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
                     let version = collection_node.attrs().optional_u64("version").unwrap_or(0);
                     debug!(
                         target: "Client/AppState",
-                        "Received server_sync for collection '{}' version {} (not syncing)",
+                        "Received server_sync for collection '{}' version {} — fetching patches",
                         name, version
                     );
+                    if let Ok(patch_name) = name.parse::<wacore::appstate::patch_decode::WAPatchName>() {
+                        let client_clone = client.clone();
+                        tokio::spawn(async move {
+                            // Try incremental first; fall back to full sync if hash/MAC mismatch
+                            if let Err(e) = client_clone
+                                .process_app_state_sync_task(patch_name, false)
+                                .await
+                            {
+                                debug!(
+                                    target: "Client/AppState",
+                                    "Incremental sync failed for {:?}: {e} — retrying with full sync",
+                                    patch_name
+                                );
+                                if let Err(e2) = client_clone
+                                    .process_app_state_sync_task(patch_name, true)
+                                    .await
+                                {
+                                    warn!(
+                                        target: "Client/AppState",
+                                        "Full sync also failed for {:?}: {e2}",
+                                        patch_name
+                                    );
+                                }
+                            }
+                        });
+                    }
                 }
             }
         }

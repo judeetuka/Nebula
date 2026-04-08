@@ -144,6 +144,76 @@ pub fn is_on_whatsapp(ctx: &PluginContext, phone: &str) -> Result<bool, String> 
 }
 
 // ---------------------------------------------------------------------------
+// New features (from DroidRelay upgrade)
+// ---------------------------------------------------------------------------
+
+/// Check multiple phone numbers at once. Returns results with JID and registration status.
+pub fn is_on_whatsapp_bulk(
+    ctx: &PluginContext,
+    phones: &[&str],
+) -> Result<Vec<serde_json::Value>, String> {
+    let args = serde_json::json!({ "phones": phones }).to_string();
+    let resp = invoke_plugin(ctx, "is_on_whatsapp", &args)?;
+    let v: serde_json::Value = serde_json::from_str(&resp).map_err(|e| e.to_string())?;
+    let results = v["results"].as_array().cloned().unwrap_or_default();
+    Ok(results)
+}
+
+/// Get a contact's profile picture URL.
+pub fn get_profile_picture(ctx: &PluginContext, jid: &str) -> Result<Option<String>, String> {
+    let args = serde_json::json!({ "jid": jid }).to_string();
+    let resp = invoke_plugin(ctx, "get_profile_picture", &args)?;
+    let v: serde_json::Value = serde_json::from_str(&resp).map_err(|e| e.to_string())?;
+    Ok(v["url"].as_str().map(|s| s.to_string()))
+}
+
+/// Set online presence (available/unavailable).
+pub fn set_presence(ctx: &PluginContext, presence: &str) -> Result<(), String> {
+    let args = serde_json::json!({ "presence": presence }).to_string();
+    invoke_plugin(ctx, "set_presence", &args)?;
+    Ok(())
+}
+
+/// Send typing indicator or other chatstate.
+pub fn send_chatstate(ctx: &PluginContext, to: &str, state: &str) -> Result<(), String> {
+    let args = serde_json::json!({ "to": to, "state": state }).to_string();
+    invoke_plugin(ctx, "send_chatstate", &args)?;
+    Ok(())
+}
+
+/// Block a contact by JID.
+pub fn block_contact(ctx: &PluginContext, jid: &str) -> Result<(), String> {
+    let args = serde_json::json!({ "jid": jid }).to_string();
+    invoke_plugin(ctx, "block_contact", &args)?;
+    Ok(())
+}
+
+/// Unblock a contact by JID.
+pub fn unblock_contact(ctx: &PluginContext, jid: &str) -> Result<(), String> {
+    let args = serde_json::json!({ "jid": jid }).to_string();
+    invoke_plugin(ctx, "unblock_contact", &args)?;
+    Ok(())
+}
+
+/// Get detailed group information.
+pub fn get_group_info(ctx: &PluginContext, group_jid: &str) -> Result<serde_json::Value, String> {
+    let args = serde_json::json!({ "jid": group_jid }).to_string();
+    let resp = invoke_plugin(ctx, "get_group_info", &args)?;
+    serde_json::from_str(&resp).map_err(|e| format!("parse error: {e}"))
+}
+
+/// Get participants of a group.
+pub fn get_group_participants(
+    ctx: &PluginContext,
+    group_jid: &str,
+) -> Result<Vec<serde_json::Value>, String> {
+    let args = serde_json::json!({ "jid": group_jid }).to_string();
+    let resp = invoke_plugin(ctx, "get_group_participants", &args)?;
+    let v: serde_json::Value = serde_json::from_str(&resp).map_err(|e| e.to_string())?;
+    Ok(v["participants"].as_array().cloned().unwrap_or_default())
+}
+
+// ---------------------------------------------------------------------------
 // Internal helper -- routes through plugin:whatsapp:action
 // ---------------------------------------------------------------------------
 

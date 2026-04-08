@@ -1,0 +1,14 @@
+[package]
+name = "nebula-plugin-screen-stream"
+version = "0.1.0"
+edition = "2021"
+authors = ["HexiCore <hexicore.dev@gmail.com>"]
+description = "SRT-based screen streaming plugin for NEBULA"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+nebula-plugin-sdk = { path = "../../../crates/nebula-plugin-sdk" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

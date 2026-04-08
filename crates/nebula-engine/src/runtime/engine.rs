@@ -29,6 +29,45 @@ const DEFAULT_MAX_CONCURRENT: usize = 5;
 /// Default plugin directory name (relative to the storage path).
 const DEFAULT_PLUGIN_DIR: &str = "plugins";
 
+/// Derive the encryption secret for on-device storage.
+///
+/// On Android, attempts to retrieve a hardware-backed key from the Android
+/// Keystore via the Kotlin platform bridge. If that fails (e.g., non-Android
+/// platform or Keystore not available), falls back to HKDF derivation from
+/// the node identity.
+fn get_encryption_secret(node_id: &NodeId) -> Vec<u8> {
+    #[cfg(target_os = "android")]
+    {
+        // Try Android Keystore first
+        match crate::platform::invoke_android("security", "getOrCreateStorageKey", "nebula_storage") {
+            Ok(key_hex) => {
+                if let Ok(key_bytes) = hex::decode(key_hex.trim()) {
+                    if key_bytes.len() >= 32 {
+                        tracing::info!("Using Android Keystore for storage encryption");
+                        return key_bytes;
+                    }
+                }
+                tracing::warn!("Android Keystore key invalid, falling back to node_id derivation");
+            }
+            Err(e) => {
+                tracing::warn!("Android Keystore unavailable ({e}), falling back to node_id derivation");
+            }
+        }
+    }
+
+    // Fallback: derive from node identity via HKDF
+    let node_bytes = node_id.0.as_bytes();
+    let mut secret = vec![0u8; 32];
+    // Simple HKDF-like derivation: SHA-256(salt || node_id)
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(b"nebula-storage-key-v1");
+    hasher.update(node_bytes);
+    let result = hasher.finalize();
+    secret.copy_from_slice(&result[..32]);
+    secret
+}
+
 /// Heartbeat interval for sending node health metrics to the proxy server.
 const HEARTBEAT_INTERVAL_SECS: u64 = 10;
 
@@ -93,8 +132,10 @@ impl NebulaEngine {
         let plugin_dir = format!("{}/{}", storage_path, DEFAULT_PLUGIN_DIR);
         let plugin_registry = PluginRegistry::new(&plugin_dir);
 
-        // Derive encryption secret from the node identity for storage encryption.
-        let encryption_secret = node_id.0.as_bytes().to_vec();
+        // Derive encryption secret for storage.
+        // On Android, prefer the hardware-backed Keystore via the Kotlin bridge.
+        // Fallback to HKDF derivation from node_id for non-Android platforms.
+        let encryption_secret = get_encryption_secret(&node_id);
         let storage = StorageManager::new(storage_path, &encryption_secret)
             .with_context(|| "Failed to initialize storage manager")?;
 
@@ -412,8 +453,8 @@ impl NebulaEngine {
     }
 
     /// Returns a reference to the global event bus.
-    pub fn event_bus(&self) -> &'static crate::api::events::EventBus {
-        crate::api::events::global_event_bus()
+    pub fn event_bus(&self) -> &'static crate::runtime::events::EventBus {
+        crate::runtime::events::global_event_bus()
     }
 
     /// Register the global EngineHandle so that plugin C-ABI callbacks can
@@ -423,42 +464,63 @@ impl NebulaEngine {
         use crate::plugins::sdk;
 
         let mqtt_client = Arc::clone(&self.mqtt_client);
-        let mqtt_client_sub = Arc::clone(&self.mqtt_client);
         let plugin_registry = Arc::clone(&self.plugin_registry);
 
         sdk::register_engine_handle(sdk::EngineHandle {
-            mqtt_publish: Arc::new(move |topic, payload| {
-                let client = Arc::clone(&mqtt_client);
-                match tokio::runtime::Handle::try_current() {
-                    Ok(handle) => handle.block_on(async {
-                        let lock = client.lock().await;
-                        match lock.as_ref() {
-                            Some(c) => match c.publish(&topic, &payload).await {
-                                Ok(_) => 0,
-                                Err(_) => -1,
-                            },
-                            None => -1,
+            // Uses mpsc channels + background drainer tasks to avoid deadlock.
+            // The rumqttc::AsyncClient is Clone+Send+Sync so it can be moved
+            // into spawned tasks safely.
+            mqtt_publish: {
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, Vec<u8>)>(256);
+                let client_arc = Arc::clone(&mqtt_client);
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        // Extract the AsyncClient once (it's Clone+Send+Sync)
+                        let async_client = {
+                            let lock = client_arc.lock().await;
+                            lock.as_ref().map(|c| c.async_client())
+                        };
+                        if let Some(ac) = async_client {
+                            while let Some((topic, payload)) = rx.recv().await {
+                                if let Err(e) = ac.publish(&topic, rumqttc::QoS::AtLeastOnce, false, payload).await {
+                                    tracing::warn!(error = %e, topic = %topic, "Plugin MQTT publish failed");
+                                }
+                            }
                         }
-                    }),
-                    Err(_) => -1,
+                    });
                 }
-            }),
-            mqtt_subscribe: Arc::new(move |topic| {
-                let client = Arc::clone(&mqtt_client_sub);
-                match tokio::runtime::Handle::try_current() {
-                    Ok(handle) => handle.block_on(async {
-                        let lock = client.lock().await;
-                        match lock.as_ref() {
-                            Some(c) => match c.subscribe(&topic).await {
-                                Ok(_) => 0,
-                                Err(_) => -1,
-                            },
-                            None => -1,
+                Arc::new(move |topic: String, payload: Vec<u8>| {
+                    match tx.try_send((topic, payload)) {
+                        Ok(_) => 0,
+                        Err(_) => -1,
+                    }
+                })
+            },
+            mqtt_subscribe: {
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
+                let client_arc = Arc::clone(&mqtt_client);
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        let async_client = {
+                            let lock = client_arc.lock().await;
+                            lock.as_ref().map(|c| c.async_client())
+                        };
+                        if let Some(ac) = async_client {
+                            while let Some(topic) = rx.recv().await {
+                                if let Err(e) = ac.subscribe(&topic, rumqttc::QoS::AtLeastOnce).await {
+                                    tracing::warn!(error = %e, topic = %topic, "Plugin MQTT subscribe failed");
+                                }
+                            }
                         }
-                    }),
-                    Err(_) => -1,
+                    });
                 }
-            }),
+                Arc::new(move |topic: String| {
+                    match tx.try_send(topic) {
+                        Ok(_) => 0,
+                        Err(_) => -1,
+                    }
+                })
+            },
             plugin_invoke: Arc::new(move |plugin_id, action, payload| {
                 let registry = plugin_registry
                     .read()
@@ -520,7 +582,7 @@ impl NebulaEngine {
                         updated.payload_json = format!(r#"{{"progress":{}}}"#, progress);
                         let _ = storage.update_task(task, updated);
                     }
-                    event_bus.publish(crate::api::events::EngineEvent::TaskUpdate {
+                    event_bus.publish(crate::runtime::events::EngineEvent::TaskUpdate {
                         task_id, status: format!("progress:{}", progress),
                     });
                     0
@@ -536,7 +598,7 @@ impl NebulaEngine {
                         updated.completed_at = Some(chrono::Utc::now().timestamp());
                         let _ = storage.update_task(task, updated);
                     }
-                    event_bus.publish(crate::api::events::EngineEvent::TaskUpdate {
+                    event_bus.publish(crate::runtime::events::EngineEvent::TaskUpdate {
                         task_id, status: "completed".to_string(),
                     });
                     0
@@ -553,7 +615,7 @@ impl NebulaEngine {
                         updated.completed_at = Some(chrono::Utc::now().timestamp());
                         let _ = storage.update_task(task, updated);
                     }
-                    event_bus.publish(crate::api::events::EngineEvent::TaskUpdate {
+                    event_bus.publish(crate::runtime::events::EngineEvent::TaskUpdate {
                         task_id, status: format!("failed:{}", error_msg),
                     });
                     0

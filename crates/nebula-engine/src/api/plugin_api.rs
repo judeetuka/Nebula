@@ -65,8 +65,7 @@ pub fn get_plugin_info(plugin_id: String) -> Result<String, String> {
             "state": plugin.state,
         });
 
-        serde_json::to_string(&info)
-            .map_err(|e| format!("Failed to serialize plugin info: {}", e))
+        serde_json::to_string(&info).map_err(|e| format!("Failed to serialize plugin info: {}", e))
     })
 }
 

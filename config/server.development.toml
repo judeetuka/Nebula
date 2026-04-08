@@ -1,0 +1,16 @@
+# NEBULA Server — Development Configuration
+# Run: cargo run -p nebula-server -- --config config/server.development.toml
+
+[server]
+bind_addr = "0.0.0.0:2333"
+default_token = "dev_token_not_for_production"
+
+[server.transport]
+type = "tcp"
+
+[api]
+bind_addr = "0.0.0.0:8080"
+
+[mqtt_relay]
+enabled = true
+port = 1884

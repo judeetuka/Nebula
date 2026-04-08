@@ -8,6 +8,7 @@ import '../../../../core/services/websocket_service.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
 import '../../../cluster/presentation/pages/dashboard_page.dart';
 import '../../../cluster/presentation/providers/cluster_provider.dart';
+import '../../../workflow/presentation/pages/workflow_list_page.dart';
 import '../../../../config/router.dart';
 import '../widgets/cluster_stats_card.dart';
 import '../widgets/metrics_chart.dart';
@@ -34,6 +35,11 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       label: 'Clusters',
     ),
     NavigationDestination(
+      icon: Icon(Icons.account_tree_outlined),
+      selectedIcon: Icon(Icons.account_tree),
+      label: 'Workflows',
+    ),
+    NavigationDestination(
       icon: Icon(Icons.settings_outlined),
       selectedIcon: Icon(Icons.settings),
       label: 'Settings',
@@ -52,6 +58,11 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       label: Text('Clusters'),
     ),
     NavigationRailDestination(
+      icon: Icon(Icons.account_tree_outlined),
+      selectedIcon: Icon(Icons.account_tree),
+      label: Text('Workflows'),
+    ),
+    NavigationRailDestination(
       icon: Icon(Icons.settings_outlined),
       selectedIcon: Icon(Icons.settings),
       label: Text('Settings'),
@@ -65,6 +76,8 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       case 1:
         return const DashboardPage();
       case 2:
+        return const WorkflowListPage();
+      case 3:
         return const _SettingsPage();
       default:
         return const _OverviewPage();

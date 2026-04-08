@@ -1368,7 +1368,7 @@ impl Client {
         }
     }
 
-    pub(crate) async fn process_app_state_sync_task(
+    pub async fn process_app_state_sync_task(
         &self,
         name: WAPatchName,
         full_sync: bool,
@@ -1567,6 +1567,153 @@ impl Client {
         }
     }
 
+    /// Send one or more app state mutations to the server.
+    ///
+    /// Encrypts the mutations, builds a patch, and sends it via the
+    /// `w:sync:app:state` IQ. On success, the local hash state is updated.
+    pub async fn send_app_state_mutation(
+        &self,
+        collection: WAPatchName,
+        mutations: Vec<(Vec<String>, wa::SyncActionValue)>,
+    ) -> Result<()> {
+        use prost::Message;
+        use wacore::appstate::encode::{build_patch, encode_mutation};
+        use wacore::appstate::expand_app_state_keys;
+
+        // Fresh sync first to ensure our local state matches the server
+        debug!(target: "Client/AppState", "Syncing {:?} before sending patch", collection);
+        if let Err(e) = self.process_app_state_sync_task(collection, false).await {
+            debug!(target: "Client/AppState", "Incremental sync failed: {e} — retrying full sync");
+            let _ = self.process_app_state_sync_task(collection, true).await;
+        }
+
+        let backend = self.persistence_manager.backend();
+
+        // Get the latest sync key
+        let (key_id, sync_key) = backend
+            .get_latest_sync_key()
+            .await?
+            .ok_or_else(|| anyhow!("no app state sync key available"))?;
+        let keys = expand_app_state_keys(&sync_key.key_data);
+
+        // Get current hash state for this collection
+        let mut state = backend.get_version(collection.as_str()).await?;
+
+        debug!(
+            target: "Client/AppState",
+            "SEND_PATCH: collection={:?} version={} hash_prefix={} mutations={}",
+            collection,
+            state.version,
+            hex::encode(&state.hash[..8]),
+            mutations.len(),
+        );
+
+        // Encode each mutation and pre-populate index_value_map with previous
+        // value MACs from the backend so the LTHash correctly subtracts old values
+        // when overwriting an existing index.
+        let mut encoded: Vec<wa::SyncdMutation> = Vec::new();
+        for (index, action_value) in mutations {
+            let mutation = encode_mutation(
+                wa::syncd_mutation::SyncdOperation::Set,
+                &index,
+                action_value,
+                &keys,
+                &key_id,
+            );
+            // Look up previous value_mac for this index so the hash update subtracts it
+            if let Some(record) = &mutation.record {
+                if let Some(index_blob) = record.index.as_ref().and_then(|i| i.blob.as_ref()) {
+                    if let Ok(Some(prev_mac)) = backend.get_mutation_mac(collection.as_str(), index_blob).await {
+                        state.index_value_map.insert(hex::encode(index_blob), prev_mac);
+                    }
+                }
+            }
+            encoded.push(mutation);
+        }
+
+        // Collect mutation MACs before build_patch consumes `encoded`
+        let sent_macs: Vec<wacore::appstate::processor::AppStateMutationMAC> = encoded
+            .iter()
+            .filter_map(|m| {
+                let record = m.record.as_ref()?;
+                let index_mac = record.index.as_ref()?.blob.clone()?;
+                let blob = record.value.as_ref()?.blob.as_ref()?;
+                if blob.len() >= 32 {
+                    Some(wacore::appstate::processor::AppStateMutationMAC {
+                        index_mac,
+                        value_mac: blob[blob.len() - 32..].to_vec(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Build the patch (updates hash_state in-place)
+        let new_version = state.version + 1;
+        let mut patch = build_patch(
+            encoded,
+            collection.as_str(),
+            new_version,
+            &keys,
+            &key_id,
+            &mut state,
+        );
+
+        // Encode patch to protobuf bytes
+        let patch_bytes = patch.encode_to_vec();
+
+        // Build the IQ stanza — patch data goes as raw bytes, NOT base64
+        let collection_node = NodeBuilder::new("collection")
+            .attr("name", collection.as_str())
+            .attr("version", (new_version - 1).to_string())
+            .attr("return_snapshot", "false")
+            .children([NodeBuilder::new("patch").bytes(patch_bytes).build()])
+            .build();
+        let sync_node = NodeBuilder::new("sync")
+            .children([collection_node])
+            .build();
+        let iq = crate::request::InfoQuery {
+            namespace: "w:sync:app:state",
+            query_type: crate::request::InfoQueryType::Set,
+            to: crate::jid_utils::server_jid(),
+            target: None,
+            id: None,
+            content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
+            timeout: None,
+        };
+
+        debug!(target: "Client/AppState", "Sending app state patch for {:?} (version {} -> {})", collection, new_version - 1, new_version);
+        let _resp = self.send_iq(iq).await?;
+
+        // Save updated hash state and mutation MACs for future patches
+        if !sent_macs.is_empty() {
+            let _ = backend.put_mutation_macs(collection.as_str(), new_version, &sent_macs).await;
+        }
+        backend.set_version(collection.as_str(), state).await?;
+
+        debug!(target: "Client/AppState", "App state patch sent and saved for {:?} (version={})", collection, new_version);
+        Ok(())
+    }
+
+    /// Mute or unmute a single contact's status updates.
+    ///
+    /// Sends a `UserStatusMuteAction` to the `regular_high` collection.
+    /// The JID should be in phone number format (e.g., "2347012856059@s.whatsapp.net").
+    pub async fn mute_user_status(&self, jid: &str, muted: bool) -> Result<()> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let action_value = wa::SyncActionValue {
+            timestamp: Some(now),
+            user_status_mute_action: Some(wa::sync_action_value::UserStatusMuteAction {
+                muted: Some(muted),
+            }),
+            ..Default::default()
+        };
+        let index = vec!["userStatusMute".to_string(), jid.to_string()];
+        self.send_app_state_mutation(WAPatchName::RegularHigh, vec![(index, action_value)])
+            .await
+    }
+
     async fn dispatch_app_state_mutation(
         &self,
         m: &crate::appstate_sync::Mutation,
@@ -1671,6 +1818,16 @@ impl Client {
                 if let Some(val) = &m.action_value
                     && let Some(act) = &val.contact_action
                 {
+                    // Persist the contact to the database
+                    let jid_str = if m.index.len() > 1 { &m.index[1] } else { "" };
+                    if !jid_str.is_empty() {
+                        let full_name = act.full_name.as_deref().unwrap_or("");
+                        let first_name = act.first_name.as_deref().unwrap_or("");
+                        let backend = self.persistence_manager.backend();
+                        if let Err(e) = backend.put_contact(jid_str, full_name, first_name).await {
+                            warn!(target: "Client/AppState", "Failed to persist contact {}: {e}", jid_str);
+                        }
+                    }
                     self.core
                         .event_bus
                         .dispatch(&Event::ContactUpdate(ContactUpdate {
@@ -1679,6 +1836,33 @@ impl Client {
                             action: Box::new(act.clone()),
                             from_full_sync: full_sync,
                         }));
+                }
+            }
+            "lid_contact" => {
+                // Modern WhatsApp uses LidContactAction for contacts (LID-based addressing)
+                if let Some(val) = &m.action_value
+                    && let Some(act) = &val.lid_contact_action
+                {
+                    let jid_str = if m.index.len() > 1 { &m.index[1] } else { "" };
+                    if !jid_str.is_empty() {
+                        let full_name = act.full_name.as_deref().unwrap_or("");
+                        let first_name = act.first_name.as_deref().unwrap_or("");
+                        let backend = self.persistence_manager.backend();
+                        // Resolve LID to phone number JID if possible
+                        let store_jid = if jid_str.contains("@lid") {
+                            let lid_user = jid_str.split('@').next().unwrap_or("");
+                            if let Ok(Some(mapping)) = backend.get_lid_mapping(lid_user).await {
+                                format!("{}@s.whatsapp.net", mapping.phone_number)
+                            } else {
+                                jid_str.to_string()
+                            }
+                        } else {
+                            jid_str.to_string()
+                        };
+                        if let Err(e) = backend.put_contact(&store_jid, full_name, first_name).await {
+                            warn!(target: "Client/AppState", "Failed to persist lid_contact {}: {e}", store_jid);
+                        }
+                    }
                 }
             }
             "mark_chat_as_read" | "markChatAsRead" => {
@@ -1695,7 +1879,13 @@ impl Client {
                     ));
                 }
             }
-            _ => {}
+            _ => {
+                debug!(
+                    target: "Client/AppState",
+                    "Unhandled app state mutation kind='{}' jid='{}' index={:?} action_value={:?}",
+                    kind, jid, m.index, m.action_value
+                );
+            }
         }
     }
 
