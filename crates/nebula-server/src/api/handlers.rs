@@ -230,11 +230,21 @@ pub async fn login(
     }
 }
 
-/// GET /api/auth/me
+/// GET /api/auth/me — requires auth middleware to insert Claims into extensions.
 pub async fn get_current_user(req: axum::http::Request<axum::body::Body>) -> impl IntoResponse {
     match req.extensions().get::<super::auth::Claims>() {
-        Some(claims) => (StatusCode::OK, Json(serde_json::json!({ "user_id": claims.sub, "email": claims.email, "role": claims.role }))),
-        None => (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Not authenticated" }))),
+        Some(claims) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "user_id": claims.sub,
+                "email": claims.email,
+                "role": claims.role,
+            })),
+        ),
+        None => (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Not authenticated" })),
+        ),
     }
 }
 
@@ -360,6 +370,35 @@ mod tests {
         AppState::new(Arc::new(RwLock::new(ClusterRegistry::new())))
     }
 
+    /// Generate a valid test JWT for protected endpoint tests.
+    fn test_auth_header() -> String {
+        let state = test_state();
+        let token = super::super::auth::generate_token(
+            "test-user", "test@nebula.dev", "super_admin", &state.jwt_config,
+        ).unwrap();
+        format!("Bearer {}", token)
+    }
+
+    /// Build a GET request with auth header.
+    fn authed_get(uri: &str) -> Request<Body> {
+        Request::builder()
+            .uri(uri)
+            .header("Authorization", test_auth_header())
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    /// Build a POST request with auth header and JSON body.
+    fn authed_post(uri: &str, body: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Authorization", test_auth_header())
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn test_health_endpoint() {
         let app = build_router(test_state());
@@ -380,84 +419,36 @@ mod tests {
     #[tokio::test]
     async fn test_list_clusters_empty() {
         let app = build_router(test_state());
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/clusters")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
+        let response = app.oneshot(authed_get("/api/clusters")).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn test_cluster_nodes_not_found() {
         let app = build_router(test_state());
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/clusters/nonexistent/nodes")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
+        let response = app.oneshot(authed_get("/api/clusters/nonexistent/nodes")).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn test_rotation_status_cluster_not_found() {
         let app = build_router(test_state());
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/clusters/nonexistent/rotation")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
+        let response = app.oneshot(authed_get("/api/clusters/nonexistent/rotation")).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn test_rotation_status_none() {
         let state = test_state();
-
-        // Register a node to create the cluster
         {
             let mut registry = state.registry.write().await;
             let node = NodeId::generate();
-            registry
-                .register_node(&ClusterId("my-cluster".into()), node)
-                .unwrap();
+            registry.register_node(&ClusterId("my-cluster".into()), node).unwrap();
         }
-
         let app = build_router(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/clusters/my-cluster/rotation")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
+        let response = app.oneshot(authed_get("/api/clusters/my-cluster/rotation")).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["rotation_status"], "none");
     }
@@ -467,78 +458,45 @@ mod tests {
         let state = test_state();
         let master = NodeId::generate();
         let worker = NodeId::generate();
-
         {
             let mut registry = state.registry.write().await;
             let cluster_id = ClusterId("my-cluster".into());
             registry.register_node(&cluster_id, master).unwrap();
             registry.register_node(&cluster_id, worker).unwrap();
         }
-
         let app = build_router(state);
-
-        let body = serde_json::json!({ "new_master": worker.to_string() });
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/clusters/my-cluster/rotate")
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
+        let body = serde_json::json!({ "new_master": worker.to_string() }).to_string();
+        let response = app.oneshot(authed_post("/api/clusters/my-cluster/rotate", &body)).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "rotation_started");
     }
 
     #[tokio::test]
     async fn test_trigger_rotation_invalid_node_id() {
-        let state = test_state();
-        let app = build_router(state);
-
-        let body = serde_json::json!({ "new_master": "not-a-uuid" });
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/clusters/my-cluster/rotate")
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
+        let app = build_router(test_state());
+        let body = serde_json::json!({ "new_master": "not-a-uuid" }).to_string();
+        let response = app.oneshot(authed_post("/api/clusters/my-cluster/rotate", &body)).await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     async fn test_trigger_rotation_cluster_not_found() {
-        let state = test_state();
         let node = NodeId::generate();
-        let app = build_router(state);
+        let app = build_router(test_state());
+        let body = serde_json::json!({ "new_master": node.to_string() }).to_string();
+        let response = app.oneshot(authed_post("/api/clusters/nonexistent/rotate", &body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
 
-        let body = serde_json::json!({ "new_master": node.to_string() });
+    #[tokio::test]
+    async fn test_protected_route_rejects_without_token() {
+        let app = build_router(test_state());
         let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/clusters/nonexistent/rotate")
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/api/clusters").body(Body::empty()).unwrap())
             .await
             .unwrap();
-
-        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }

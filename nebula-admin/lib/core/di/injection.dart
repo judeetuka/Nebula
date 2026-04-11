@@ -1,9 +1,7 @@
-import 'package:firebase_auth/firebase_auth.dart' as fb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
 import '../../features/auth/data/datasources/auth_api_source.dart';
-import '../../features/auth/data/datasources/auth_firebase_source.dart';
 import '../../features/auth/data/datasources/auth_remote_source.dart';
 import '../../features/auth/data/repositories/auth_repository_impl.dart';
 import '../../features/auth/domain/repositories/auth_repository.dart';
@@ -21,8 +19,6 @@ import '../storage/local_storage.dart';
 
 // --- Local storage ---
 
-/// Singleton [LocalStorage] instance. Must be initialized in main() before
-/// the ProviderScope is created, then set via override.
 final localStorageProvider = Provider<LocalStorage>(
   (ref) => throw UnimplementedError(
     'localStorageProvider must be overridden with a pre-initialized instance',
@@ -31,10 +27,6 @@ final localStorageProvider = Provider<LocalStorage>(
 
 // --- Server configuration ---
 
-/// Base URL for the nebula-server REST API.
-///
-/// Reads the persisted value from Hive on first access. Runtime changes are
-/// written through to Hive by the settings page.
 final serverUrlProvider = StateProvider<String>((ref) {
   final storage = ref.read(localStorageProvider);
   return storage.serverUrl;
@@ -42,38 +34,17 @@ final serverUrlProvider = StateProvider<String>((ref) {
 
 // --- Authorized HTTP client ---
 
-/// An [http.Client] that attaches `Authorization: Bearer <token>` to every
-/// outbound request when a JWT is stored in [LocalStorage].
 final authorizedClientProvider = Provider<http.Client>((ref) {
   final storage = ref.watch(localStorageProvider);
   return AuthorizedClient(storage: storage);
 });
 
-// --- Auth ---
+// --- Auth (JWT only, no Firebase) ---
 
-/// Provides the auth data source.
-///
-/// Priority order:
-///   1. JWT API source (talks to nebula-server /api/auth/*)
-///   2. Firebase Auth (if initialized)
-///   3. Stub fallback for local development
 final authRemoteSourceProvider = Provider<AuthRemoteSource>((ref) {
   final baseUrl = ref.watch(serverUrlProvider);
   final storage = ref.watch(localStorageProvider);
-
-  // If a JWT token already exists, or the server URL is set,
-  // prefer the API auth source.
   return AuthApiSource(baseUrl: baseUrl, storage: storage);
-});
-
-/// Firebase-backed auth source. Used as fallback if needed.
-final firebaseAuthSourceProvider = Provider<AuthRemoteSource?>((ref) {
-  try {
-    fb.FirebaseAuth.instance;
-    return AuthFirebaseSource();
-  } catch (_) {
-    return null;
-  }
 });
 
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
@@ -92,9 +63,6 @@ final signOutUseCaseProvider = Provider<SignOut>(
 
 // --- Cluster ---
 
-/// Provides the cluster data source backed by real HTTP calls.
-///
-/// Uses the [authorizedClientProvider] so every request carries JWT auth.
 final clusterRemoteSourceProvider = Provider<ClusterRemoteSource>((ref) {
   final baseUrl = ref.watch(serverUrlProvider);
   final client = ref.watch(authorizedClientProvider);

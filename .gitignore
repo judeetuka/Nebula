@@ -36,3 +36,4 @@ blob-report/
 # Generated
 **/frb_generated.*
 firebase-debug.log
+*.db

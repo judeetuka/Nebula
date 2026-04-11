@@ -1,4 +1,3 @@
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:manny_ui/manny_ui.dart';
@@ -13,15 +12,6 @@ void main() async {
   // Initialize Hive-backed local storage before anything else.
   final storage = LocalStorage();
   await storage.init();
-
-  // Attempt Firebase initialization. If firebase_options.dart is missing or
-  // Firebase is not configured for this environment, the app falls back to
-  // JWT API auth (see injection.dart).
-  try {
-    await Firebase.initializeApp();
-  } catch (e) {
-    debugPrint('Firebase not configured: $e');
-  }
 
   runApp(
     ProviderScope(
