@@ -3076,4 +3076,106 @@ object NebulaPlatformBridge {
     fun isForegroundServiceRunning(): Boolean {
         return NebulaForegroundService.instance != null
     }
+
+    // =========================================================================
+    // B-1: DOZE MODE HANDLING
+    // =========================================================================
+
+    @JvmStatic
+    fun startNebulaService(context: Context) {
+        val intent = Intent(context, NebulaForegroundService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent)
+        } else {
+            context.startService(intent)
+        }
+    }
+
+    @JvmStatic
+    fun requestBatteryOptimizationExemption(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(context.packageName)) {
+                val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                intent.data = android.net.Uri.parse("package:${context.packageName}")
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+            }
+        }
+    }
+
+    @JvmStatic
+    fun isBatteryOptimizationDisabled(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            return pm.isIgnoringBatteryOptimizations(context.packageName)
+        }
+        return true
+    }
+
+    // =========================================================================
+    // B-4: FAILOVER WAKELOCK
+    // =========================================================================
+
+    private var failoverWakeLock: PowerManager.WakeLock? = null
+
+    @JvmStatic
+    fun acquireFailoverWakeLock(context: Context) {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        failoverWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "nebula:failover")
+        failoverWakeLock?.acquire(10 * 60 * 1000L) // 10 min max
+    }
+
+    @JvmStatic
+    fun releaseFailoverWakeLock() {
+        failoverWakeLock?.let { if (it.isHeld) it.release() }
+        failoverWakeLock = null
+    }
+
+    // =========================================================================
+    // A-1: MANUFACTURER BATTERY SAVER WORKAROUNDS
+    // =========================================================================
+
+    @JvmStatic
+    fun getManufacturer(): String = Build.MANUFACTURER.lowercase()
+
+    @JvmStatic
+    fun openManufacturerBatterySettings(context: Context) {
+        val manufacturer = Build.MANUFACTURER.lowercase()
+        val intent = when {
+            manufacturer.contains("xiaomi") -> Intent().setComponent(
+                android.content.ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")
+            )
+            manufacturer.contains("huawei") -> Intent().setComponent(
+                android.content.ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity")
+            )
+            manufacturer.contains("samsung") -> Intent(android.provider.Settings.ACTION_BATTERY_SAVER_SETTINGS)
+            manufacturer.contains("oppo") -> Intent().setComponent(
+                android.content.ComponentName("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity")
+            )
+            else -> Intent(android.provider.Settings.ACTION_BATTERY_SAVER_SETTINGS)
+        }
+        try {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            context.startActivity(Intent(android.provider.Settings.ACTION_BATTERY_SAVER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+
+    // =========================================================================
+    // N-2: NETWORK SWITCHING DETECTION
+    // =========================================================================
+
+    @JvmStatic
+    fun registerNetworkCallback(context: Context, onNetworkChanged: Runnable) {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val request = android.net.NetworkRequest.Builder()
+            .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        cm.registerNetworkCallback(request, object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: android.net.Network) { onNetworkChanged.run() }
+            override fun onLost(network: android.net.Network) { onNetworkChanged.run() }
+        })
+    }
 }

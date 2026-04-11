@@ -45,8 +45,12 @@ pub struct CertBundle {
 pub fn generate_ca(common_name: &str) -> Result<NebulaCa> {
     let mut params =
         CertificateParams::new(Vec::new()).context("Failed to create CA cert params")?;
-    params.distinguished_name.push(DnType::CommonName, common_name);
-    params.distinguished_name.push(DnType::OrganizationName, "NEBULA Network");
+    params
+        .distinguished_name
+        .push(DnType::CommonName, common_name);
+    params
+        .distinguished_name
+        .push(DnType::OrganizationName, "NEBULA Network");
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     params.key_usages = vec![
         KeyUsagePurpose::KeyCertSign,
@@ -55,10 +59,16 @@ pub fn generate_ca(common_name: &str) -> Result<NebulaCa> {
     ];
 
     let ca_key = KeyPair::generate().context("Failed to generate CA key pair")?;
-    let ca_cert = params.self_signed(&ca_key).context("Failed to self-sign CA cert")?;
+    let ca_cert = params
+        .self_signed(&ca_key)
+        .context("Failed to self-sign CA cert")?;
     let ca_cert_pem = ca_cert.pem();
 
-    Ok(NebulaCa { ca_cert, ca_key, ca_cert_pem })
+    Ok(NebulaCa {
+        ca_cert,
+        ca_key,
+        ca_cert_pem,
+    })
 }
 
 /// Generate a server certificate signed by the CA.
@@ -75,7 +85,8 @@ pub fn generate_server_cert(ca: &NebulaCa, hostname: &str) -> Result<CertBundle>
     params.use_authority_key_identifier_extension = true;
 
     let key_pair = KeyPair::generate().context("Failed to generate server key pair")?;
-    let cert = params.signed_by(&key_pair, &ca.ca_cert, &ca.ca_key)
+    let cert = params
+        .signed_by(&key_pair, &ca.ca_cert, &ca.ca_key)
         .context("Failed to sign server cert")?;
 
     Ok(CertBundle {
@@ -97,7 +108,8 @@ pub fn generate_client_cert(ca: &NebulaCa, node_id: &str) -> Result<CertBundle> 
     params.use_authority_key_identifier_extension = true;
 
     let key_pair = KeyPair::generate().context("Failed to generate client key pair")?;
-    let cert = params.signed_by(&key_pair, &ca.ca_cert, &ca.ca_key)
+    let cert = params
+        .signed_by(&key_pair, &ca.ca_cert, &ca.ca_key)
         .context("Failed to sign client cert")?;
 
     Ok(CertBundle {
@@ -115,7 +127,8 @@ pub fn make_client_tls_config(
 ) -> Result<rustls::ClientConfig> {
     let ca_cert_der = pem_to_der(ca_cert_pem).context("Failed to parse CA PEM")?;
     let mut root_store = rustls::RootCertStore::empty();
-    root_store.add(CertificateDer::from(ca_cert_der))
+    root_store
+        .add(CertificateDer::from(ca_cert_der))
         .context("Failed to add CA cert to root store")?;
 
     let config = if let Some(client) = client_cert {
@@ -246,7 +259,11 @@ mod tests {
         let tls_config = make_broker_tls_config(&ca.ca_cert_pem, &server_cert, &temp_dir).unwrap();
 
         match tls_config {
-            rumqttd::TlsConfig::Rustls { capath, certpath, keypath } => {
+            rumqttd::TlsConfig::Rustls {
+                capath,
+                certpath,
+                keypath,
+            } => {
                 assert!(capath.is_some());
                 assert!(Path::new(&certpath).exists());
                 assert!(Path::new(&keypath).exists());
@@ -276,9 +293,49 @@ mod tests {
 
     #[test]
     fn test_generate_tls_setup() {
-        let (ca, server_cert, client_config) = generate_tls_setup("test-cluster", "node-1").unwrap();
+        let (ca, server_cert, client_config) =
+            generate_tls_setup("test-cluster", "node-1").unwrap();
         assert!(!ca.ca_cert_pem.is_empty());
         assert!(!server_cert.cert_pem.is_empty());
         let _ = client_config;
     }
+
+    #[test]
+    fn test_ca_fingerprint() {
+        let ca = generate_ca("test-pin").unwrap();
+        let fp = ca_fingerprint(&ca);
+        assert_eq!(fp.len(), 64); // SHA-256 hex = 64 chars
+    }
+
+    #[test]
+    fn test_verify_ca_pin_matches() {
+        let ca = generate_ca("test-pin").unwrap();
+        let fp = ca_fingerprint(&ca);
+        assert!(verify_ca_pin(&ca, &fp));
+    }
+
+    #[test]
+    fn test_verify_ca_pin_mismatch() {
+        let ca = generate_ca("test-pin").unwrap();
+        assert!(!verify_ca_pin(
+            &ca,
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        ));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// S-5: TLS certificate pinning
+// ---------------------------------------------------------------------------
+
+/// Compute the SHA-256 fingerprint of the CA certificate DER bytes.
+pub fn ca_fingerprint(ca: &NebulaCa) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(ca.ca_cert_pem.as_bytes());
+    hex::encode(digest)
+}
+
+/// Verify a CA certificate against a pinned fingerprint.
+pub fn verify_ca_pin(ca: &NebulaCa, expected_fingerprint: &str) -> bool {
+    ca_fingerprint(ca) == expected_fingerprint
 }

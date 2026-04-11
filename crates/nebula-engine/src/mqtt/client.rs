@@ -117,8 +117,19 @@ impl MqttClient {
     /// **Note:** this only registers the dispatch callback. You must also
     /// call [`subscribe`](MqttClient::subscribe) so that the broker
     /// actually delivers messages for this filter.
+    /// Maximum total subscriptions allowed (R-1).
+    const MAX_SUBSCRIPTIONS: usize = 500;
+
     pub fn on_message(&self, topic_filter: &str, handler: MessageHandler) {
         let mut handlers = self.handlers.write().expect("handlers lock poisoned");
+        if handlers.len() >= Self::MAX_SUBSCRIPTIONS {
+            tracing::warn!(
+                max = Self::MAX_SUBSCRIPTIONS,
+                "MQTT subscription limit reached — ignoring new subscription for '{}'",
+                topic_filter
+            );
+            return;
+        }
         handlers.insert(topic_filter.to_string(), handler);
     }
 

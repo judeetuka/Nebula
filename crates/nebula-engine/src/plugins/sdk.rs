@@ -31,10 +31,11 @@ pub struct EngineHandle {
 
 static ENGINE_HANDLE: OnceLock<EngineHandle> = OnceLock::new();
 
-/// Register the global engine handle. Must be called exactly once at startup.
+/// Register the global engine handle. Should be called once at startup.
+/// Subsequent calls are ignored with a warning (safe for hot-reload).
 pub fn register_engine_handle(handle: EngineHandle) {
     if ENGINE_HANDLE.set(handle).is_err() {
-        panic!("EngineHandle already registered");
+        tracing::warn!("EngineHandle already registered — ignoring duplicate registration");
     }
 }
 

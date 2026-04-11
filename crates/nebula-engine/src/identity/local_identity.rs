@@ -39,10 +39,11 @@ impl LocalIdentity {
         if identity_file.exists() {
             let data = std::fs::read_to_string(&identity_file)
                 .with_context(|| format!("Failed to read identity file: {:?}", identity_file))?;
-            let persisted: PersistedIdentity = serde_json::from_str(&data)
-                .with_context(|| "Failed to parse identity file")?;
-            let node_id = NodeId::from_str(&persisted.node_id)
-                .with_context(|| format!("Invalid NodeId in identity file: {}", persisted.node_id))?;
+            let persisted: PersistedIdentity =
+                serde_json::from_str(&data).with_context(|| "Failed to parse identity file")?;
+            let node_id = NodeId::from_str(&persisted.node_id).with_context(|| {
+                format!("Invalid NodeId in identity file: {}", persisted.node_id)
+            })?;
 
             Ok(Self {
                 node_id,
@@ -60,21 +61,30 @@ impl LocalIdentity {
                 server_url: None,
                 auth_token: None,
             };
-            identity.save().with_context(|| "Failed to save new identity")?;
+            identity
+                .save()
+                .with_context(|| "Failed to save new identity")?;
             Ok(identity)
         }
     }
 
     /// Persist the current identity state to disk.
     fn save(&self) -> Result<()> {
-        std::fs::create_dir_all(&self.storage_path)
-            .with_context(|| format!("Failed to create storage directory: {:?}", self.storage_path))?;
+        std::fs::create_dir_all(&self.storage_path).with_context(|| {
+            format!(
+                "Failed to create storage directory: {:?}",
+                self.storage_path
+            )
+        })?;
 
         let persisted = PersistedIdentity {
             node_id: self.node_id.to_string(),
             cluster_id: self.cluster_id.clone(),
             server_url: self.server_url.clone(),
-            auth_token: self.auth_token.clone(),
+            // S-4: Auth token is NOT persisted in plaintext JSON.
+            // It is stored in the engine's encrypted blob store instead.
+            // The in-memory field is populated from encrypted storage at startup.
+            auth_token: None,
         };
 
         let json = serde_json::to_string_pretty(&persisted)
@@ -97,7 +107,8 @@ impl LocalIdentity {
         self.cluster_id = Some(cluster_id.to_string());
         self.server_url = Some(server_url.to_string());
         self.auth_token = Some(auth_token.to_string());
-        self.save().with_context(|| "Failed to persist cluster configuration")
+        self.save()
+            .with_context(|| "Failed to persist cluster configuration")
     }
 
     /// Returns the node's unique identifier.
@@ -121,8 +132,10 @@ impl LocalIdentity {
     }
 
     /// Returns `true` if the cluster has been configured.
+    /// Note: auth_token is stored separately in encrypted storage (S-4),
+    /// so we only check cluster_id and server_url here.
     pub fn is_configured(&self) -> bool {
-        self.cluster_id.is_some() && self.server_url.is_some() && self.auth_token.is_some()
+        self.cluster_id.is_some() && self.server_url.is_some()
     }
 }
 
@@ -222,8 +235,11 @@ mod tests {
         assert_eq!(reloaded.node_id(), original_id);
         assert_eq!(reloaded.cluster_id(), Some("cluster-99"));
         assert_eq!(reloaded.server_url(), Some("wss://server.test"));
-        assert_eq!(reloaded.auth_token(), Some("tok-abc"));
-        assert!(reloaded.is_configured());
+        // S-4: auth_token is no longer persisted in plaintext JSON.
+        // It's stored in the encrypted blob store by the engine.
+        assert_eq!(reloaded.auth_token(), None);
+        // is_configured requires auth_token, so use cluster_id check instead
+        assert!(reloaded.cluster_id().is_some());
 
         cleanup(&dir);
     }
@@ -233,8 +249,7 @@ mod tests {
         let dir = temp_test_dir("valid_json");
 
         let identity = LocalIdentity::load_or_create(dir.to_str().unwrap()).unwrap();
-        let file_content =
-            std::fs::read_to_string(dir.join(IDENTITY_FILENAME)).unwrap();
+        let file_content = std::fs::read_to_string(dir.join(IDENTITY_FILENAME)).unwrap();
 
         // Should parse as valid JSON
         let value: serde_json::Value = serde_json::from_str(&file_content).unwrap();

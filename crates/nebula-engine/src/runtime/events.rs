@@ -51,6 +51,23 @@ impl EventBus {
     pub fn subscriber_count(&self) -> usize {
         self.sender.receiver_count()
     }
+
+    /// Receive the next event, handling lag gracefully (M-5).
+    /// Returns `None` when the channel is closed.
+    pub async fn recv_resilient(
+        rx: &mut broadcast::Receiver<EngineEvent>,
+    ) -> Option<EngineEvent> {
+        loop {
+            match rx.recv().await {
+                Ok(event) => return Some(event),
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(skipped = n, "EventBus subscriber lagged — skipped {n} events");
+                    // Continue receiving — don't break
+                }
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    }
 }
 
 impl Default for EventBus {

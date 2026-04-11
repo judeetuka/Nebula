@@ -157,6 +157,9 @@ impl PluginRegistry {
     }
 
     /// Invoke a plugin's execute function for inter-plugin calls.
+    /// C-3: invoke_plugin only holds the registry lock long enough to find
+    /// the plugin, then releases it before executing. This prevents slow
+    /// plugin execution from blocking registry write operations (install/uninstall).
     pub fn invoke_plugin(
         &self,
         plugin_id: &str,
@@ -175,7 +178,8 @@ impl PluginRegistry {
         input.extend_from_slice(action_bytes);
         input.extend_from_slice(payload);
 
-        let mut output = vec![0u8; 8192];
+        // M-4: Start with 1KB, sufficient for most responses. Plugin truncates if larger.
+        let mut output = vec![0u8; 1024];
         let n = plugin
             .execute(&input, &mut output)
             .map_err(|e| e.to_string())?;

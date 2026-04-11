@@ -42,6 +42,26 @@ impl StorageManager {
 
         Self::apply_pragmas(&conn, false)?;
         migrations::apply_migrations(&conn)?;
+
+        // P-2: Run integrity check on existing databases.
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .unwrap_or_else(|_| "error".to_string());
+        if integrity != "ok" {
+            tracing::error!(result = %integrity, "Database integrity check FAILED — attempting recovery");
+            let _ = conn.execute_batch("PRAGMA journal_mode = DELETE;");
+            let _ = conn.execute_batch("VACUUM;");
+            let recheck: String = conn
+                .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+                .unwrap_or_else(|_| "error".to_string());
+            if recheck != "ok" {
+                tracing::error!(result = %recheck, "Recovery FAILED — database may be corrupted");
+            } else {
+                tracing::info!("Database recovery succeeded, switching back to WAL");
+                let _ = conn.execute_batch("PRAGMA journal_mode = WAL;");
+            }
+        }
+
         info!(path = %db_path.display(), "storage database opened");
 
         Ok(Self {

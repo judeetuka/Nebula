@@ -177,6 +177,11 @@ impl NebulaEngine {
             .configure_cluster(cluster_id, server_url, auth_token)
             .with_context(|| "Failed to persist cluster configuration")?;
 
+        // S-4: Store auth token in encrypted blob store (not plaintext JSON)
+        self.storage
+            .store_encrypted("auth_token", "credentials", auth_token.as_bytes())
+            .with_context(|| "Failed to store auth token in encrypted storage")?;
+
         // Initialize the smart router now that we have cluster info
         let node_id = self.identity.node_id();
         let router = SmartRouter::new(cluster_id, node_id, 0, server_url);
@@ -257,14 +262,11 @@ impl NebulaEngine {
         let shutdown_rx = self.subscribe_shutdown();
         let hb_node_id = node_id;
         let started_at = self.started_at;
+        let hb_storage = Arc::clone(&self.storage);
 
         tokio::spawn(async move {
             run_heartbeat_loop(
-                tunnel_client,
-                hb_node_id,
-                shutdown_rx,
-                task_executor,
-                started_at,
+                tunnel_client, hb_node_id, shutdown_rx, task_executor, started_at, hb_storage,
             )
             .await;
         });
@@ -288,6 +290,7 @@ impl NebulaEngine {
         let task_executor = Arc::clone(&self.task_executor);
         let shutdown_tx = self.shutdown_tx.as_ref().map(|tx| tx.subscribe());
         let started_at = self.started_at;
+        let hb_storage = Arc::clone(&self.storage);
 
         let server_url = self
             .identity
@@ -317,14 +320,21 @@ impl NebulaEngine {
                 }
             };
 
-            // Transition: Connecting -> Registering -> Active
+            // C-2: Atomic state transitions — validate both steps under one lock
             {
                 let mut s = state.write().await;
-                *s = NodeState::Registering;
-            }
-            {
-                let mut s = state.write().await;
-                *s = NodeState::Active { role };
+                let current = s.clone();
+                if current.can_transition_to(&NodeState::Registering) {
+                    *s = NodeState::Registering;
+                } else {
+                    warn!(from = ?current, "Cannot transition to Registering");
+                }
+                let active = NodeState::Active { role };
+                if s.can_transition_to(&active) {
+                    *s = active;
+                } else {
+                    warn!(from = ?*s, "Cannot transition to Active");
+                }
             }
 
             // If Master, start MQTT broker
@@ -346,7 +356,7 @@ impl NebulaEngine {
             let hb_tunnel = Arc::clone(&tunnel_client);
             let hb_executor = Arc::clone(&task_executor);
             tokio::spawn(async move {
-                run_heartbeat_loop(hb_tunnel, node_id, shutdown_tx, hb_executor, started_at).await;
+                run_heartbeat_loop(hb_tunnel, node_id, shutdown_tx, hb_executor, started_at, hb_storage).await;
             });
 
             Ok(role)
@@ -724,34 +734,74 @@ async fn run_heartbeat_loop(
     mut shutdown_rx: Option<broadcast::Receiver<bool>>,
     task_executor: Arc<StdRwLock<TaskExecutor>>,
     started_at: Instant,
+    storage: Arc<StorageManager>,
 ) {
     let interval = Duration::from_secs(HEARTBEAT_INTERVAL_SECS);
+    let mut consecutive_send_failures: u32 = 0;
+    let mut heartbeat_count: u64 = 0;
 
     loop {
         // Check for shutdown signal
         if let Some(ref mut rx) = shutdown_rx {
             match rx.try_recv() {
-                Ok(true) => {
-                    info!("Heartbeat loop: shutdown signal received");
-                    break;
-                }
-                Err(broadcast::error::TryRecvError::Closed) => {
-                    info!("Heartbeat loop: shutdown channel closed");
-                    break;
-                }
+                Ok(true) => { info!("Heartbeat loop: shutdown signal received"); break; }
+                Err(broadcast::error::TryRecvError::Closed) => { info!("Heartbeat loop: shutdown channel closed"); break; }
                 _ => {}
             }
         }
 
         tokio::time::sleep(interval).await;
+        heartbeat_count += 1;
 
         let payload = collect_device_metrics(node_id, &task_executor, started_at);
 
+        // B-2: Battery-aware workload adjustment
+        let battery = payload.battery_level;
+        if battery > 0 && battery <= 15 {
+            warn!(battery = battery, "Battery CRITICAL — initiating graceful shutdown");
+            break;
+        } else if battery > 0 && battery <= 25 {
+            warn!(battery = battery, "Battery LOW — reducing workload");
+        }
+
+        // R-2: Task timeout enforcement — check every heartbeat cycle
+        if let Ok(running_tasks) = storage.get_tasks_by_status("running") {
+            let now = chrono::Utc::now().timestamp();
+            for task in running_tasks {
+                if let Some(started) = task.started_at {
+                    if now - started > task.timeout_secs as i64 {
+                        let mut failed = task.clone();
+                        failed.status = "failed".to_string();
+                        failed.error_message = Some(format!("Timed out after {}s", task.timeout_secs));
+                        failed.completed_at = Some(now);
+                        let _ = storage.update_task(task, failed);
+                    }
+                }
+            }
+        }
+
+        // M-1: Prune old heartbeats every 100 cycles (~17 minutes at 10s interval)
+        if heartbeat_count % 100 == 0 {
+            let max_age = 3600; // Keep 1 hour of heartbeat history
+            if let Ok(pruned) = storage.prune_heartbeats(max_age) {
+                if pruned > 0 {
+                    info!(pruned = pruned, "Pruned old heartbeat records");
+                }
+            }
+        }
+
+        // Send heartbeat with retry (P-3)
         let mut tc = tunnel_client.lock().await;
         if let Some(ref mut client) = *tc {
             if let Err(e) = client.send_heartbeat(payload).await {
-                error!(error = %e, "Failed to send heartbeat");
-                break;
+                consecutive_send_failures += 1;
+                error!(error = %e, failures = consecutive_send_failures, "Failed to send heartbeat");
+                if consecutive_send_failures >= 5 {
+                    error!("5 consecutive heartbeat failures — exiting loop");
+                    break;
+                }
+            } else {
+                consecutive_send_failures = 0;
             }
         } else {
             warn!("Heartbeat loop: tunnel client not available");

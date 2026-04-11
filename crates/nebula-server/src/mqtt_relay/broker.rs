@@ -74,11 +74,11 @@ fn build_relay_config(listen_port: u16) -> Config {
                 .parse()
                 .expect("valid socket addr"),
             tls: None,
-            next_connection_delay_ms: 1,
+            next_connection_delay_ms: 100,
             connections: ConnectionSettings {
                 connection_timeout_ms: 5000,
-                max_payload_size: 262_144,
-                max_inflight_count: 100,
+                max_payload_size: 65_536,
+                max_inflight_count: 20,
                 auth: None,
                 external_auth: None,
                 dynamic_filters: false,

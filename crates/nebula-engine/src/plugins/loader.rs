@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use anyhow::{bail, Context, Result};
 use libloading::{Library, Symbol};
+use sha2::{Digest, Sha256};
 
 use super::sdk::{create_plugin_context, drop_host_data, PluginContext};
 use super::types::{PluginManifest, PluginState};
@@ -48,6 +50,19 @@ impl fmt::Debug for LoadedPlugin {
     }
 }
 
+/// Verify an Ed25519 signature over the SHA-256 digest of a plugin binary.
+pub fn verify_plugin_signature(so_path: &str, sig_path: &str, pub_key: &[u8; 32]) -> Result<()> {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    let so_bytes = std::fs::read(so_path).with_context(|| format!("read plugin: {so_path}"))?;
+    let sig_bytes = std::fs::read(sig_path).with_context(|| format!("read sig: {sig_path}"))?;
+    let digest = Sha256::digest(&so_bytes);
+    let signature =
+        Signature::from_slice(&sig_bytes).map_err(|e| anyhow::anyhow!("bad sig: {e}"))?;
+    let vk = VerifyingKey::from_bytes(pub_key).map_err(|e| anyhow::anyhow!("bad key: {e}"))?;
+    vk.verify(&digest, &signature)
+        .map_err(|e| anyhow::anyhow!("Signature FAILED: {e}"))
+}
+
 impl LoadedPlugin {
     /// Load a shared object from `path` and verify that the required ABI
     /// symbols are present.
@@ -68,15 +83,31 @@ impl LoadedPlugin {
             so_path: path.to_string(),
         };
 
-        // SAFETY: Loading a shared library is inherently unsafe because we
-        // are executing foreign code that the Rust compiler cannot verify.
-        // We mitigate risk by:
-        //   1. Only loading libraries whose manifests have been validated.
-        //   2. Immediately verifying that the required symbols exist.
-        //   3. Never calling any symbol until `initialize` is explicitly invoked.
+        // S-3: Check Ed25519 signature if a verification key is configured.
+        let sig_path = format!("{path}.sig");
+        if let Ok(hex_key) = std::env::var("NEBULA_PLUGIN_VERIFY_KEY") {
+            let key_bytes = hex::decode(&hex_key).context("NEBULA_PLUGIN_VERIFY_KEY bad hex")?;
+            if key_bytes.len() != 32 {
+                bail!("NEBULA_PLUGIN_VERIFY_KEY must be 32 bytes (64 hex chars)");
+            }
+            let pub_key: [u8; 32] = key_bytes.try_into().unwrap();
+            if Path::new(&sig_path).exists() {
+                verify_plugin_signature(path, &sig_path, &pub_key)
+                    .with_context(|| format!("Signature verification failed for {path}"))?;
+                tracing::info!(plugin = %path, "Plugin signature verified");
+            } else {
+                bail!("Plugin signature not found at {sig_path} — refusing unsigned plugin");
+            }
+        } else if Path::new(&sig_path).exists() {
+            tracing::warn!(plugin = %path, "Plugin has .sig but no NEBULA_PLUGIN_VERIFY_KEY — skipping verification");
+        }
+
+        // SAFETY: Loading a shared library is inherently unsafe. We mitigate by:
+        //   1. Validating plugin manifests.
+        //   2. Verifying Ed25519 signature when key is configured.
+        //   3. Verifying required symbols exist before calling.
         let lib = unsafe {
-            Library::new(path)
-                .with_context(|| format!("Failed to dlopen plugin at {}", path))?
+            Library::new(path).with_context(|| format!("Failed to dlopen plugin at {}", path))?
         };
 
         // Verify required symbols exist (but do not call them yet).
@@ -129,10 +160,7 @@ impl LoadedPlugin {
     ///
     /// Returns an error if the library is not loaded or the init function
     /// returns a non-zero code.
-    pub fn initialize(
-        &mut self,
-        state_store: Arc<RwLock<HashMap<String, Vec<u8>>>>,
-    ) -> Result<()> {
+    pub fn initialize(&mut self, state_store: Arc<RwLock<HashMap<String, Vec<u8>>>>) -> Result<()> {
         let lib = self
             .library
             .as_ref()
@@ -265,6 +293,10 @@ impl LoadedPlugin {
     /// Perform a hot-reload: shutdown -> unload -> load new binary ->
     /// initialize with the same state store.
     ///
+    /// **WARNING (M-3):** On Android/Bionic, `dlclose` does not always unmap
+    /// shared library memory. Each hot-reload may leak the old `.so`'s pages.
+    /// Limit hot-reloads to a few per session; restart the app for a clean slate.
+    ///
     /// The plugin's key-value state is preserved because the `state_store`
     /// `Arc` is cloned into the new `PluginContext`.
     ///
@@ -385,7 +417,10 @@ mod tests {
         let mut output = [0u8; 64];
         let result = plugin.execute(input, &mut output);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Library not loaded"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Library not loaded"));
     }
 
     #[test]
@@ -393,7 +428,10 @@ mod tests {
         let mut plugin = LoadedPlugin::new_stub(sample_manifest(), "/tmp/test.so");
         let result = plugin.shutdown();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Library not loaded"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Library not loaded"));
     }
 
     #[test]
@@ -402,7 +440,10 @@ mod tests {
         let store = Arc::new(RwLock::new(HashMap::new()));
         let result = plugin.initialize(store);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Library not loaded"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Library not loaded"));
     }
 
     #[test]
