@@ -1,7 +1,7 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:nebula_ui/nebula_ui.dart';
+import 'package:manny_ui/manny_ui.dart';
 
 import 'config/router.dart';
 import 'core/di/injection.dart';
@@ -39,8 +39,8 @@ class NebulaAdminApp extends StatelessWidget {
     return MaterialApp(
       title: 'NEBULA Admin',
       debugShowCheckedModeBanner: false,
-      theme: NebulaTheme.lightTheme,
-      darkTheme: NebulaTheme.darkTheme,
+      theme: MannyTheme.lightTheme,
+      darkTheme: MannyTheme.darkTheme,
       themeMode: ThemeMode.system,
       initialRoute: AppRoutes.login,
       onGenerateRoute: generateRoute,

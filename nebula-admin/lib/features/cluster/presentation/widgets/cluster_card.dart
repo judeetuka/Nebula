@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:nebula_ui/nebula_ui.dart';
+import 'package:manny_ui/manny_ui.dart';
 
 import '../../domain/entities/cluster.dart';
 
@@ -44,7 +44,7 @@ class ClusterCard extends StatelessWidget {
                     height: 10,
                     decoration: BoxDecoration(
                       color: cluster.nodeCount > 0
-                          ? NebulaTheme.tertiaryTeal
+                          ? MannyTheme.tertiaryTeal
                           : theme.colorScheme.outline,
                       shape: BoxShape.circle,
                     ),

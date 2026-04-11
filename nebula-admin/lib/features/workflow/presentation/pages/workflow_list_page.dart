@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:nebula_ui/nebula_ui.dart';
+import 'package:manny_ui/manny_ui.dart';
 
 import '../../../../config/router.dart';
 import '../../data/models/workflow_model.dart';

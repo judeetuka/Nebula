@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:nebula_ui/nebula_ui.dart';
+import 'package:manny_ui/manny_ui.dart';
 
 /// URL input bar with navigation controls and loading progress indicator.
 /// Supports typing a URL or search query, with inline progress feedback.

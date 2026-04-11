@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:nebula_ui/nebula_ui.dart';
+import 'package:manny_ui/manny_ui.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 class QrDisplay extends StatelessWidget {

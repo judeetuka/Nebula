@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:nebula_ui/nebula_ui.dart';
+import 'package:manny_ui/manny_ui.dart';
 
 import '../../domain/entities/node_info.dart';
 
@@ -12,7 +12,7 @@ class NodeListTile extends StatelessWidget {
     final theme = Theme.of(context);
     switch (node.status) {
       case 'online':
-        return NebulaTheme.tertiaryTeal;
+        return MannyTheme.tertiaryTeal;
       case 'busy':
         return Colors.orange;
       case 'offline':

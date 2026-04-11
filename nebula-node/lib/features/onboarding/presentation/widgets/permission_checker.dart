@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:nebula_ui/nebula_ui.dart';
+import 'package:manny_ui/manny_ui.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 /// Widget that checks and requests runtime permissions before showing

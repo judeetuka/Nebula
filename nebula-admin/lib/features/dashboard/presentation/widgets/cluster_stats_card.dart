@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:nebula_ui/nebula_ui.dart';
+import 'package:manny_ui/manny_ui.dart';
 
 import '../../../cluster/domain/entities/cluster.dart';
 import '../../../cluster/domain/entities/node_info.dart';
@@ -70,7 +70,7 @@ class ClusterStatsCard extends StatelessWidget {
                     icon: Icons.check_circle,
                     label: 'Online',
                     value: '$onlineNodes',
-                    color: NebulaTheme.tertiaryTeal,
+                    color: MannyTheme.tertiaryTeal,
                   ),
                 ),
                 Expanded(
@@ -101,7 +101,7 @@ class ClusterStatsCard extends StatelessWidget {
                     label: 'Avg Battery',
                     value: avgBattery / 100,
                     displayValue: '$avgBattery%',
-                    color: NebulaTheme.tertiaryTeal,
+                    color: MannyTheme.tertiaryTeal,
                     theme: theme,
                   ),
                 ),

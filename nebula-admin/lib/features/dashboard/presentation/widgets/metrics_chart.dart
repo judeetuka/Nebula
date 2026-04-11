@@ -1,6 +1,6 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
-import 'package:nebula_ui/nebula_ui.dart';
+import 'package:manny_ui/manny_ui.dart';
 
 import '../../../cluster/domain/entities/node_info.dart';
 
@@ -114,7 +114,7 @@ class MetricsChart extends StatelessWidget {
                   lineBarsData: [
                     _lineData(
                       spots: batterySpots,
-                      color: NebulaTheme.tertiaryTeal,
+                      color: MannyTheme.tertiaryTeal,
                     ),
                     _lineData(
                       spots: cpuSpots,
@@ -180,7 +180,7 @@ class _Legend extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        _LegendItem(color: NebulaTheme.tertiaryTeal, label: 'Battery %'),
+        _LegendItem(color: MannyTheme.tertiaryTeal, label: 'Battery %'),
         const SizedBox(width: UIConstants.spacingLG),
         _LegendItem(color: theme.colorScheme.primary, label: 'CPU %'),
       ],

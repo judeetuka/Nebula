@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:nebula_ui/nebula_ui.dart';
+import 'package:manny_ui/manny_ui.dart';
 
 import 'config/router.dart';
 import 'features/engine/presentation/providers/engine_provider.dart';
@@ -29,8 +29,8 @@ class NebulaNodeApp extends ConsumerWidget {
     return MaterialApp(
       title: 'NEBULA Node',
       debugShowCheckedModeBanner: false,
-      theme: NebulaTheme.lightTheme,
-      darkTheme: NebulaTheme.darkTheme,
+      theme: MannyTheme.lightTheme,
+      darkTheme: MannyTheme.darkTheme,
       themeMode: ThemeMode.dark,
       initialRoute: initialRoute,
       onGenerateRoute: onGenerateRoute,
