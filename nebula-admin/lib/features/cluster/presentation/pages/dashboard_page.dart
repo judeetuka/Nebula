@@ -104,7 +104,9 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
           if (crossAxisCount == 1) {
             return ListView.separated(
               controller: widget.scrollController,
-              padding: UIConstants.paddingLG,
+              padding:
+                  UIConstants.paddingLG +
+                  EdgeInsets.only(left: context.isMobile ? 0 : 72),
               itemCount: state.clusters.length + 1, // +1 for bottom spacer
               separatorBuilder: (_, _) =>
                   const SizedBox(height: UIConstants.spacingSM),
@@ -125,7 +127,9 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
 
           return GridView.builder(
             controller: widget.scrollController,
-            padding: UIConstants.paddingLG,
+            padding:
+                UIConstants.paddingLG +
+                EdgeInsets.only(left: context.isMobile ? 0 : 72),
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: crossAxisCount,
               crossAxisSpacing: UIConstants.spacingMD,

@@ -7,9 +7,12 @@ cd "$(dirname "$0")/../nebula-admin"
 
 DEVICE="${1:-linux}"
 
+# Suppress harmless GTK icon theme warnings on Linux
+export GTK_THEME=Adwaita 2>/dev/null || true
+
 flutter pub get
 echo "Starting NEBULA admin dashboard on $DEVICE..."
 echo "  Server URL: http://localhost:8080 (default, change in settings)"
 echo ""
 
-exec flutter run -d "$DEVICE"
+exec flutter run -d "$DEVICE" 2>&1 | grep -v "Gtk-WARNING.*Theme directory"

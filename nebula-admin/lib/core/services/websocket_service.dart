@@ -9,46 +9,65 @@ import '../di/injection.dart';
 import '../storage/local_storage.dart';
 import 'server_event.dart';
 
-/// Manages a WebSocket connection to the NEBULA server's event stream.
+/// Real-time event service.
 ///
-/// Automatically reconnects with exponential backoff when the connection drops.
-/// Exposes events as a broadcast [Stream<ServerEvent>].
-class WebSocketService {
+/// **Disabled by default.** The admin app uses pull-to-refresh and periodic
+/// auto-refresh (30s) for all data. Live mode is an opt-in toggle in settings
+/// that enables WebSocket on web or faster polling on native.
+///
+/// Why: The admin app is a management dashboard, not a real-time control
+/// panel. Persistent connections waste battery on mobile and add complexity
+/// for no practical benefit in most use cases.
+class EventService {
   final String serverUrl;
   final LocalStorage storage;
 
-  WebSocketChannel? _channel;
   final StreamController<ServerEvent> _controller =
       StreamController<ServerEvent>.broadcast();
+  bool _disposed = false;
+  bool _liveMode = false;
+
+  WebSocketChannel? _channel;
   Timer? _reconnectTimer;
   int _reconnectAttempts = 0;
-  bool _disposed = false;
 
-  static const int _maxReconnectDelay = 30; // seconds
+  EventService({required this.serverUrl, required this.storage});
 
-  WebSocketService({required this.serverUrl, required this.storage});
-
-  /// Broadcast stream of server events.
   Stream<ServerEvent> get events => _controller.stream;
+  bool get isLive => _liveMode && !_disposed;
 
-  /// Open the WebSocket connection.
-  void connect() {
-    if (_disposed) return;
+  /// Enable live mode (WebSocket on web). No-op on native (use polling provider instead).
+  void enableLiveMode() {
+    if (_liveMode || _disposed) return;
+    _liveMode = true;
+    if (kIsWeb) {
+      _connectWebSocket();
+    }
+    debugPrint('Live mode enabled');
+  }
+
+  /// Disable live mode and close any connections.
+  void disableLiveMode() {
+    _liveMode = false;
     _reconnectTimer?.cancel();
+    _channel?.sink.close();
+    _channel = null;
+    debugPrint('Live mode disabled');
+  }
+
+  void _connectWebSocket() {
+    if (_disposed || !_liveMode) return;
 
     final wsUrl = serverUrl
-        .replaceFirst('https://', 'wss://')
-        .replaceFirst('http://', 'ws://');
-    final token = storage.jwtToken ?? '';
-
-    final uri = Uri.parse(
-      '$wsUrl/api/ws/events',
-    ).replace(queryParameters: token.isNotEmpty ? {'token': token} : null);
-
-    debugPrint('WebSocket connecting to $uri');
+        .replaceFirst('http://', 'ws://')
+        .replaceFirst('https://', 'wss://');
+    final token = storage.jwtToken;
+    final uri = token != null
+        ? '$wsUrl/api/ws/events?token=$token'
+        : '$wsUrl/api/ws/events';
 
     try {
-      _channel = WebSocketChannel.connect(uri);
+      _channel = WebSocketChannel.connect(Uri.parse(uri));
       _reconnectAttempts = 0;
 
       _channel!.stream.listen(
@@ -60,55 +79,48 @@ class WebSocketService {
             debugPrint('WebSocket parse error: $e');
           }
         },
-        onError: (Object error) {
-          debugPrint('WebSocket error: $error');
-          _scheduleReconnect();
-        },
         onDone: () {
-          debugPrint('WebSocket closed');
-          _scheduleReconnect();
+          if (_liveMode) _scheduleReconnect();
+        },
+        onError: (error) {
+          debugPrint('WebSocket error: $error');
+          if (_liveMode) _scheduleReconnect();
         },
       );
     } catch (e) {
-      debugPrint('WebSocket connect failed: $e');
-      _scheduleReconnect();
+      debugPrint('WebSocket connection failed: $e');
+      if (_liveMode) _scheduleReconnect();
     }
   }
 
   void _scheduleReconnect() {
-    if (_disposed) return;
-    _channel = null;
+    if (_disposed || !_liveMode) return;
     _reconnectAttempts++;
-    final delay = Duration(
-      seconds: _reconnectAttempts.clamp(1, _maxReconnectDelay),
-    );
-    debugPrint('WebSocket reconnecting in ${delay.inSeconds}s');
-    _reconnectTimer = Timer(delay, connect);
+    final delaySecs = (_reconnectAttempts * 2).clamp(1, 30);
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(Duration(seconds: delaySecs), _connectWebSocket);
   }
 
-  /// Close the connection and release resources.
   void dispose() {
     _disposed = true;
-    _reconnectTimer?.cancel();
-    _channel?.sink.close();
+    disableLiveMode();
     _controller.close();
   }
 }
 
 // --- Riverpod providers ---
 
-/// Provides the singleton [WebSocketService] tied to the current server URL.
-final webSocketServiceProvider = Provider<WebSocketService>((ref) {
+final eventServiceProvider = Provider<EventService>((ref) {
   final serverUrl = ref.watch(serverUrlProvider);
   final storage = ref.watch(localStorageProvider);
-  final service = WebSocketService(serverUrl: serverUrl, storage: storage);
-  service.connect();
+  final service = EventService(serverUrl: serverUrl, storage: storage);
+  // NOT connected by default -- user opts in via settings
   ref.onDispose(() => service.dispose());
   return service;
 });
 
-/// Stream of all server events from the WebSocket.
+/// Stream of server events. Only emits when live mode is enabled.
 final serverEventsProvider = StreamProvider<ServerEvent>((ref) {
-  final service = ref.watch(webSocketServiceProvider);
+  final service = ref.watch(eventServiceProvider);
   return service.events;
 });

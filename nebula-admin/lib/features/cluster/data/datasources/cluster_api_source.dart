@@ -25,7 +25,11 @@ class ClusterApiSource implements ClusterRemoteSource {
     if (response.statusCode != 200) {
       throw ClusterFailure('Failed to fetch clusters: ${response.statusCode}');
     }
-    final List<dynamic> data = jsonDecode(response.body) as List<dynamic>;
+    final decoded = jsonDecode(response.body);
+    // Server returns {"clusters": [...]} — extract the list
+    final List<dynamic> data = decoded is List
+        ? decoded
+        : (decoded['clusters'] as List<dynamic>?) ?? [];
     return data
         .map(
           (json) => Cluster(
@@ -34,7 +38,7 @@ class ClusterApiSource implements ClusterRemoteSource {
             nodeCount: (json['node_count'] ?? 0) as int,
             serverUrl: baseUrl,
             createdAt:
-                DateTime.tryParse((json['created_at'] ?? '') as String) ??
+                DateTime.tryParse('${json['created_at'] ?? ''}') ??
                 DateTime.now(),
           ),
         )
@@ -69,7 +73,10 @@ class ClusterApiSource implements ClusterRemoteSource {
     if (response.statusCode != 200) {
       throw ClusterFailure('Failed to fetch nodes: ${response.statusCode}');
     }
-    final List<dynamic> data = jsonDecode(response.body) as List<dynamic>;
+    final decoded = jsonDecode(response.body);
+    final List<dynamic> data = decoded is List
+        ? decoded
+        : (decoded['nodes'] as List<dynamic>?) ?? [];
     return data
         .map(
           (json) => NodeInfo(
