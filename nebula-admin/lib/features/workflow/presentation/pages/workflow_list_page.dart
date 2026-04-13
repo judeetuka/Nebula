@@ -7,7 +7,8 @@ import '../../data/models/workflow_model.dart';
 import '../providers/workflow_provider.dart';
 
 class WorkflowListPage extends ConsumerStatefulWidget {
-  const WorkflowListPage({super.key});
+  const WorkflowListPage({super.key, this.scrollController});
+  final ScrollController? scrollController;
 
   @override
   ConsumerState<WorkflowListPage> createState() => _WorkflowListPageState();
@@ -23,54 +24,16 @@ class _WorkflowListPageState extends ConsumerState<WorkflowListPage> {
   }
 
   void _createWorkflow() {
-    final nameController = TextEditingController();
-    final descController = TextEditingController();
-    showDialog<void>(
+    AppAlertDialog.showWithInput(
       context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          title: const Text('New Workflow'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Name',
-                  hintText: 'e.g. USSD Balance Check',
-                ),
-                autofocus: true,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: descController,
-                decoration: const InputDecoration(
-                  labelText: 'Description',
-                  hintText: 'Optional description',
-                ),
-                maxLines: 2,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final name = nameController.text.trim();
-                if (name.isEmpty) return;
-                Navigator.of(ctx).pop();
-                ref
-                    .read(workflowEditorProvider.notifier)
-                    .createNew(name, descController.text.trim());
-                Navigator.of(context).pushNamed(AppRoutes.workflowEditor);
-              },
-              child: const Text('Create'),
-            ),
-          ],
-        );
+      title: 'New Workflow',
+      message: 'Enter a name for the new workflow.',
+      hintText: 'e.g. USSD Balance Check',
+      actionText: 'Create',
+      validator: (v) => v.trim().isEmpty ? 'Name cannot be empty' : null,
+      onActionPressed: (name) {
+        ref.read(workflowEditorProvider.notifier).createNew(name.trim(), '');
+        Navigator.of(context).pushNamed(AppRoutes.workflowEditor);
       },
     );
   }
@@ -101,13 +64,15 @@ class _WorkflowListPageState extends ConsumerState<WorkflowListPage> {
     final theme = Theme.of(context);
     final state = ref.watch(workflowListProvider);
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Workflows')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _createWorkflow,
-        icon: const Icon(Icons.add),
-        label: const Text('New Workflow'),
-      ),
+    return FrostedScaffold(
+      title: 'Workflows',
+      actions: [
+        IconButton(
+          icon: const Icon(IconlyBroken.plus),
+          onPressed: _createWorkflow,
+          tooltip: 'New Workflow',
+        ),
+      ],
       body: state.isLoading
           ? const Center(child: CircularProgressIndicator())
           : state.workflows.isEmpty
@@ -116,22 +81,22 @@ class _WorkflowListPageState extends ConsumerState<WorkflowListPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
-                    Icons.account_tree_outlined,
+                    IconlyBroken.activity,
                     size: 64,
-                    color: theme.colorScheme.onSurfaceVariant,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
                   ),
                   const SizedBox(height: UIConstants.spacingLG),
                   Text(
                     'No workflows yet',
                     style: theme.textTheme.titleMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
                     ),
                   ),
                   const SizedBox(height: UIConstants.spacingSM),
                   Text(
                     'Create a workflow to build a visual pipeline.',
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
                     ),
                   ),
                 ],
@@ -142,11 +107,15 @@ class _WorkflowListPageState extends ConsumerState<WorkflowListPage> {
                 ref.read(workflowListProvider.notifier).loadWorkflows();
               },
               child: ListView.separated(
+                controller: widget.scrollController,
                 padding: UIConstants.paddingLG,
-                itemCount: state.workflows.length,
+                itemCount: state.workflows.length + 1, // +1 for bottom spacer
                 separatorBuilder: (_, _) =>
                     const SizedBox(height: UIConstants.spacingSM),
                 itemBuilder: (context, index) {
+                  if (index == state.workflows.length) {
+                    return const SizedBox(height: 80);
+                  }
                   final wf = state.workflows[index];
                   return _WorkflowCard(
                     workflow: wf,
@@ -174,63 +143,66 @@ class _WorkflowCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  Icons.account_tree,
-                  color: theme.colorScheme.onPrimaryContainer,
-                ),
+    return GestureDetector(
+      onTap: onTap,
+      child: FrostedGlass(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
               ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      workflow.name,
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+              child: Icon(
+                IconlyBold.activity,
+                color: theme.colorScheme.primary,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    workflow.name,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
                     ),
-                    if (workflow.description.isNotEmpty)
-                      Text(
-                        workflow.description,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  if (workflow.description.isNotEmpty)
+                    Text(
+                      workflow.description,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurface.withValues(
+                          alpha: 0.6,
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${workflow.nodes.length} nodes · ${workflow.edges.length} edges',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ],
-                ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${workflow.nodes.length} nodes · ${workflow.edges.length} edges',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                    ),
+                  ),
+                ],
               ),
-              IconButton(
-                icon: const Icon(Icons.delete_outline, size: 20),
-                onPressed: onDelete,
-                tooltip: 'Delete',
+            ),
+            IconButton(
+              icon: Icon(
+                IconlyBroken.delete,
+                size: 20,
+                color: theme.colorScheme.error,
               ),
-            ],
-          ),
+              onPressed: onDelete,
+              tooltip: 'Delete',
+            ),
+          ],
         ),
       ),
     );

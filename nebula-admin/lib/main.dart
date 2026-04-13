@@ -24,14 +24,46 @@ void main() async {
 class NebulaAdminApp extends StatelessWidget {
   const NebulaAdminApp({super.key});
 
+  // ── HUD Theme Palette ──
+  static final _lightTheme = MannyTheme.lightTheme.copyWith(
+    colorScheme: MannyTheme.lightTheme.colorScheme.copyWith(
+      primary: const Color(0xFF059669),
+      secondary: const Color(0xFF2563EB),
+      tertiary: const Color(0xFFD97706),
+      error: const Color(0xFFDC2626),
+      surface: const Color(0xFFF4F6F8),
+      primaryContainer: const Color(0xFFD1FAE5),
+      secondaryContainer: const Color(0xFFDBEAFE),
+    ),
+    scaffoldBackgroundColor: const Color(0xFFF4F6F8),
+    splashFactory: FrostedInkSplash.splashFactory,
+  );
+
+  static final _darkTheme = MannyTheme.darkTheme.copyWith(
+    colorScheme: MannyTheme.darkTheme.colorScheme.copyWith(
+      primary: const Color(0xFF6EE7B7),
+      secondary: const Color(0xFF60A5FA),
+      tertiary: const Color(0xFFFBBF24),
+      error: const Color(0xFFF87171),
+      surface: const Color(0xFF0C0F14),
+      primaryContainer: const Color(0xFF14332A),
+      secondaryContainer: const Color(0xFF1A2740),
+    ),
+    scaffoldBackgroundColor: const Color(0xFF0C0F14),
+    splashFactory: FrostedInkSplash.splashFactory,
+  );
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'NEBULA Admin',
       debugShowCheckedModeBanner: false,
-      theme: MannyTheme.lightTheme,
-      darkTheme: MannyTheme.darkTheme,
+      theme: _lightTheme,
+      darkTheme: _darkTheme,
       themeMode: ThemeMode.system,
+      scrollBehavior: MannyScrollBehavior().copyWith(
+        physics: const ClampingScrollPhysics(),
+      ),
       initialRoute: AppRoutes.login,
       onGenerateRoute: generateRoute,
     );

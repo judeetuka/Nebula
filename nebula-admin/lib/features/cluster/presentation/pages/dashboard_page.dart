@@ -7,7 +7,8 @@ import '../providers/cluster_provider.dart';
 import '../widgets/cluster_card.dart';
 
 class DashboardPage extends ConsumerStatefulWidget {
-  const DashboardPage({super.key});
+  const DashboardPage({super.key, this.scrollController});
+  final ScrollController? scrollController;
 
   @override
   ConsumerState<DashboardPage> createState() => _DashboardPageState();
@@ -17,9 +18,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(
-      () => ref.read(clustersProvider.notifier).loadClusters(),
-    );
+    Future.microtask(() => ref.read(clustersProvider.notifier).loadClusters());
   }
 
   @override
@@ -27,14 +26,17 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
     final state = ref.watch(clustersProvider);
     final theme = Theme.of(context);
 
-    return Scaffold(
+    return FrostedScaffold(
+      title: 'Clusters',
+      actions: [
+        IconButton(
+          icon: const Icon(IconlyBroken.plus),
+          onPressed: () =>
+              Navigator.of(context).pushNamed(AppRoutes.clusterCreate),
+          tooltip: 'New Cluster',
+        ),
+      ],
       body: _buildBody(state, theme),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () =>
-            Navigator.of(context).pushNamed(AppRoutes.clusterCreate),
-        icon: const Icon(Icons.add),
-        label: const Text('New Cluster'),
-      ),
     );
   }
 
@@ -48,8 +50,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.error_outline,
-                size: 48, color: theme.colorScheme.error),
+            Icon(IconlyBroken.danger, size: 48, color: theme.colorScheme.error),
             const SizedBox(height: UIConstants.spacingMD),
             Text(state.error!, style: theme.textTheme.bodyLarge),
             const SizedBox(height: UIConstants.spacingLG),
@@ -68,20 +69,23 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.cloud_off,
-                size: 64, color: theme.colorScheme.outlineVariant),
+            Icon(
+              IconlyBroken.discovery,
+              size: 64,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
+            ),
             const SizedBox(height: UIConstants.spacingMD),
             Text(
               'No clusters yet',
               style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
               ),
             ),
             const SizedBox(height: UIConstants.spacingSM),
             Text(
               'Create your first compute cluster',
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.outline,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
               ),
             ),
           ],
@@ -93,26 +97,34 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
       onRefresh: () => ref.read(clustersProvider.notifier).loadClusters(),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final crossAxisCount = constraints.maxWidth > 800 ? 3 : (constraints.maxWidth > 500 ? 2 : 1);
+          final crossAxisCount = constraints.maxWidth > 800
+              ? 3
+              : (constraints.maxWidth > 500 ? 2 : 1);
 
           if (crossAxisCount == 1) {
             return ListView.separated(
+              controller: widget.scrollController,
               padding: UIConstants.paddingLG,
-              itemCount: state.clusters.length,
+              itemCount: state.clusters.length + 1, // +1 for bottom spacer
               separatorBuilder: (_, _) =>
                   const SizedBox(height: UIConstants.spacingSM),
               itemBuilder: (context, index) {
+                if (index == state.clusters.length) {
+                  return const SizedBox(height: 80);
+                }
                 final cluster = state.clusters[index];
                 return ClusterCard(
                   cluster: cluster,
-                  onTap: () => Navigator.of(context)
-                      .pushNamed(AppRoutes.clusterDetail(cluster.id)),
+                  onTap: () => Navigator.of(
+                    context,
+                  ).pushNamed(AppRoutes.clusterDetail(cluster.id)),
                 );
               },
             );
           }
 
           return GridView.builder(
+            controller: widget.scrollController,
             padding: UIConstants.paddingLG,
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: crossAxisCount,
@@ -125,8 +137,9 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
               final cluster = state.clusters[index];
               return ClusterCard(
                 cluster: cluster,
-                onTap: () => Navigator.of(context)
-                    .pushNamed(AppRoutes.clusterDetail(cluster.id)),
+                onTap: () => Navigator.of(
+                  context,
+                ).pushNamed(AppRoutes.clusterDetail(cluster.id)),
               );
             },
           );

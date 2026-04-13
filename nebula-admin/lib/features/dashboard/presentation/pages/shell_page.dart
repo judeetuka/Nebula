@@ -22,65 +22,43 @@ class ShellPage extends ConsumerStatefulWidget {
 
 class _ShellPageState extends ConsumerState<ShellPage> {
   int _selectedIndex = 0;
+  final _scrollController = ScrollController();
+  late final HideOnScrollController _hideController;
+  final _navToast = NavToastController();
+  bool _navVisible = true;
 
-  static const _destinations = [
-    NavigationDestination(
-      icon: Icon(Icons.dashboard_outlined),
-      selectedIcon: Icon(Icons.dashboard),
-      label: 'Dashboard',
-    ),
-    NavigationDestination(
-      icon: Icon(Icons.cloud_outlined),
-      selectedIcon: Icon(Icons.cloud),
-      label: 'Clusters',
-    ),
-    NavigationDestination(
-      icon: Icon(Icons.account_tree_outlined),
-      selectedIcon: Icon(Icons.account_tree),
-      label: 'Workflows',
-    ),
-    NavigationDestination(
-      icon: Icon(Icons.settings_outlined),
-      selectedIcon: Icon(Icons.settings),
-      label: 'Settings',
-    ),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _hideController = HideOnScrollController(_scrollController);
+    _hideController.addListener(() {
+      if (mounted) setState(() => _navVisible = _hideController.visible);
+    });
+    _navToast.scrollController = _hideController;
+    // Wire the global nav toast so NotificationToast.show(useNav: true) works
+    NotificationToast.navToastController = _navToast;
+  }
 
-  static const _railDestinations = [
-    NavigationRailDestination(
-      icon: Icon(Icons.dashboard_outlined),
-      selectedIcon: Icon(Icons.dashboard),
-      label: Text('Dashboard'),
-    ),
-    NavigationRailDestination(
-      icon: Icon(Icons.cloud_outlined),
-      selectedIcon: Icon(Icons.cloud),
-      label: Text('Clusters'),
-    ),
-    NavigationRailDestination(
-      icon: Icon(Icons.account_tree_outlined),
-      selectedIcon: Icon(Icons.account_tree),
-      label: Text('Workflows'),
-    ),
-    NavigationRailDestination(
-      icon: Icon(Icons.settings_outlined),
-      selectedIcon: Icon(Icons.settings),
-      label: Text('Settings'),
-    ),
-  ];
+  @override
+  void dispose() {
+    _hideController.dispose();
+    _navToast.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   Widget _buildPage() {
     switch (_selectedIndex) {
       case 0:
-        return const _OverviewPage();
+        return _OverviewPage(scrollController: _scrollController);
       case 1:
-        return const DashboardPage();
+        return DashboardPage(scrollController: _scrollController);
       case 2:
-        return const WorkflowListPage();
+        return WorkflowListPage(scrollController: _scrollController);
       case 3:
-        return const _SettingsPage();
+        return _SettingsPage(scrollController: _scrollController);
       default:
-        return const _OverviewPage();
+        return _OverviewPage(scrollController: _scrollController);
     }
   }
 
@@ -89,64 +67,6 @@ class _ShellPageState extends ConsumerState<ShellPage> {
     if (mounted) {
       Navigator.of(context).pushReplacementNamed(AppRoutes.login);
     }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isWide = MediaQuery.sizeOf(context).width > 800;
-
-    if (isWide) {
-      return Scaffold(
-        body: Row(
-          children: [
-            NavigationRail(
-              selectedIndex: _selectedIndex,
-              onDestinationSelected: (index) =>
-                  setState(() => _selectedIndex = index),
-              labelType: NavigationRailLabelType.all,
-              leading: Padding(
-                padding: const EdgeInsets.symmetric(
-                  vertical: UIConstants.spacingLG,
-                ),
-                child: Icon(
-                  Icons.cloud_circle,
-                  size: 40,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-              ),
-              trailing: Expanded(
-                child: Align(
-                  alignment: Alignment.bottomCenter,
-                  child: Padding(
-                    padding: const EdgeInsets.only(
-                      bottom: UIConstants.spacingLG,
-                    ),
-                    child: IconButton(
-                      onPressed: () => _confirmSignOut(context),
-                      icon: const Icon(Icons.logout),
-                      tooltip: 'Sign Out',
-                    ),
-                  ),
-                ),
-              ),
-              destinations: _railDestinations,
-            ),
-            const VerticalDivider(width: 1, thickness: 1),
-            Expanded(child: _buildPage()),
-          ],
-        ),
-      );
-    }
-
-    return Scaffold(
-      body: _buildPage(),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
-        onDestinationSelected: (index) =>
-            setState(() => _selectedIndex = index),
-        destinations: _destinations,
-      ),
-    );
   }
 
   void _confirmSignOut(BuildContext context) {
@@ -158,11 +78,148 @@ class _ShellPageState extends ConsumerState<ShellPage> {
       onActionPressed: _handleSignOut,
     );
   }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final primaryColor = theme.colorScheme.primary;
+    final isWide = MediaQuery.sizeOf(context).width > 800;
+
+    if (isWide) {
+      return Scaffold(
+        body: Row(
+          children: [
+            FrostedGlass(
+              borderRadius: BorderRadius.zero,
+              child: NavigationRail(
+                backgroundColor: Colors.transparent,
+                selectedIndex: _selectedIndex,
+                onDestinationSelected: (index) =>
+                    setState(() => _selectedIndex = index),
+                labelType: NavigationRailLabelType.all,
+                indicatorColor: primaryColor.withValues(alpha: 0.15),
+                selectedIconTheme: IconThemeData(color: primaryColor),
+                selectedLabelTextStyle: TextStyle(
+                  color: primaryColor,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
+                ),
+                leading: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: UIConstants.spacingLG,
+                  ),
+                  child: Icon(
+                    IconlyBold.discovery,
+                    size: 40,
+                    color: primaryColor,
+                  ),
+                ),
+                trailing: Expanded(
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.only(
+                        bottom: UIConstants.spacingLG,
+                      ),
+                      child: IconButton(
+                        onPressed: () => _confirmSignOut(context),
+                        icon: const Icon(IconlyBroken.logout),
+                        tooltip: 'Sign Out',
+                      ),
+                    ),
+                  ),
+                ),
+                destinations: const [
+                  NavigationRailDestination(
+                    icon: Icon(IconlyBroken.home),
+                    selectedIcon: Icon(IconlyBold.home),
+                    label: Text('Dashboard'),
+                  ),
+                  NavigationRailDestination(
+                    icon: Icon(IconlyBroken.discovery),
+                    selectedIcon: Icon(IconlyBold.discovery),
+                    label: Text('Clusters'),
+                  ),
+                  NavigationRailDestination(
+                    icon: Icon(IconlyBroken.activity),
+                    selectedIcon: Icon(IconlyBold.activity),
+                    label: Text('Workflows'),
+                  ),
+                  NavigationRailDestination(
+                    icon: Icon(IconlyBroken.setting),
+                    selectedIcon: Icon(IconlyBold.setting),
+                    label: Text('Settings'),
+                  ),
+                ],
+              ),
+            ),
+            const VerticalDivider(width: 1, thickness: 1),
+            Expanded(child: _buildPage()),
+          ],
+        ),
+      );
+    }
+
+    return Scaffold(
+      extendBody: true,
+      body: _buildPage(),
+      bottomNavigationBar: NavigationView(
+        useTooltip: false,
+        floating: true,
+        floatingWidthFactor: 0.82,
+        floatingMarginBottom: 18,
+        visible: _navVisible,
+        toastController: _navToast,
+        onChangePage: (i) => setState(() => _selectedIndex = i),
+        selectedIndex: _selectedIndex,
+        curve: Curves.fastLinearToSlowEaseIn,
+        durationAnimation: const Duration(milliseconds: 500),
+        backgroundColor: theme.scaffoldBackgroundColor,
+        color: primaryColor,
+        enableGlassmorphism: true,
+        items: [
+          ItemNavigationView(
+            iconBefore: Icon(
+              IconlyBroken.home,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+            ),
+            iconAfter: Icon(IconlyBold.home, color: primaryColor),
+            tooltip: 'Dashboard',
+          ),
+          ItemNavigationView(
+            iconBefore: Icon(
+              IconlyBroken.discovery,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+            ),
+            iconAfter: Icon(IconlyBold.discovery, color: primaryColor),
+            tooltip: 'Clusters',
+          ),
+          ItemNavigationView(
+            iconBefore: Icon(
+              IconlyBroken.activity,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+            ),
+            iconAfter: Icon(IconlyBold.activity, color: primaryColor),
+            tooltip: 'Workflows',
+          ),
+          ItemNavigationView(
+            iconBefore: Icon(
+              IconlyBroken.setting,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+            ),
+            iconAfter: Icon(IconlyBold.setting, color: primaryColor),
+            tooltip: 'Settings',
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// Overview / Dashboard page with charts, stats, and real-time event feed.
 class _OverviewPage extends ConsumerStatefulWidget {
-  const _OverviewPage();
+  const _OverviewPage({this.scrollController});
+  final ScrollController? scrollController;
 
   @override
   ConsumerState<_OverviewPage> createState() => _OverviewPageState();
@@ -207,12 +264,53 @@ class _OverviewPageState extends ConsumerState<_OverviewPage> {
       });
     });
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Overview')),
+    return FrostedScaffold(
+      title: 'Dashboard',
+      actions: [
+        IconButton(
+          icon: Icon(
+            theme.brightness == Brightness.dark
+                ? Icons.light_mode_outlined
+                : Icons.dark_mode_outlined,
+          ),
+          onPressed: () {
+            // Theme toggle not available at widget level — placeholder
+          },
+        ),
+        IconButton(
+          icon: const Icon(IconlyBroken.setting),
+          onPressed: () {
+            OptionsMenu.show(
+              context: context,
+              title: 'Quick Settings',
+              options: [
+                MenuOption(
+                  icon: IconlyBroken.profile,
+                  label: 'Account',
+                  subtitle: 'Manage your profile',
+                  onTap: () {},
+                ),
+                MenuOption(
+                  icon: IconlyBroken.shield_done,
+                  label: 'Security',
+                  subtitle: 'Cluster encryption',
+                  onTap: () {},
+                ),
+                MenuOption(
+                  icon: IconlyBroken.logout,
+                  label: 'Sign Out',
+                  isDestructive: true,
+                  onTap: () {},
+                ),
+              ],
+            );
+          },
+        ),
+      ],
       body: RefreshIndicator(
         onRefresh: () => ref.read(clustersProvider.notifier).loadClusters(),
         child: ListView(
-          padding: UIConstants.paddingLG,
+          controller: widget.scrollController,
           children: [
             // Stats card
             ClusterStatsCard(
@@ -225,50 +323,127 @@ class _OverviewPageState extends ConsumerState<_OverviewPage> {
             MetricsChart(nodes: nodesState.nodes),
             const SizedBox(height: UIConstants.spacingLG),
 
-            // Real-time event feed
-            Text(
-              'Recent Events',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
+            // Task deployment tracker
+            FrostedGlass(
+              padding: UIConstants.paddingLG,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Task Deployment',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  StepTracker(
+                    steps: [
+                      TrackerStep(
+                        label: 'Created',
+                        description: 'Task queued by master node',
+                        icon: IconlyBroken.paper,
+                        status: StepStatus.completed,
+                        timestamp: '10:42 AM',
+                      ),
+                      TrackerStep(
+                        label: 'Distributed',
+                        description: 'Sent to worker nodes via MQTT',
+                        icon: IconlyBroken.send,
+                        status: StepStatus.completed,
+                        timestamp: '10:42 AM',
+                      ),
+                      TrackerStep(
+                        label: 'Executing',
+                        description: 'Workers processing task payload',
+                        icon: IconlyBroken.activity,
+                        status: StepStatus.active,
+                        timestamp: '10:43 AM',
+                      ),
+                      TrackerStep(
+                        label: 'Completed',
+                        description: 'Results aggregated and reported',
+                        icon: IconlyBroken.shield_done,
+                        status: StepStatus.pending,
+                      ),
+                    ],
+                    activeStepInfo: FrostedGlass(
+                      borderRadius: BorderRadius.circular(8),
+                      padding: const EdgeInsets.all(10),
+                      shadow: false,
+                      tintColor: Colors.blue,
+                      opacity: 0.1,
+                      child: Row(
+                        children: [
+                          const Icon(
+                            IconlyBroken.time_circle,
+                            size: 16,
+                            color: Colors.blue,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Est. ~45s remaining',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: Colors.blue,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: UIConstants.spacingSM),
-            if (_recentEvents.isEmpty)
-              Card(
-                child: Padding(
-                  padding: UIConstants.paddingLG,
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.wifi_tethering,
-                        color: theme.colorScheme.onSurfaceVariant,
+            const SizedBox(height: UIConstants.spacingLG),
+
+            // Real-time event feed
+            FrostedGlass(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: Text(
+                      'Recent Events',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
                       ),
-                      const SizedBox(width: UIConstants.spacingSM),
-                      Expanded(
-                        child: Text(
-                          'Listening for real-time events...',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
-              )
-            else
-              Card(
-                clipBehavior: Clip.antiAlias,
-                child: Column(
-                  children: [
-                    for (int i = 0; i < _recentEvents.length; i++) ...[
-                      _EventTile(event: _recentEvents[i]),
-                      if (i < _recentEvents.length - 1)
-                        const Divider(height: 1),
-                    ],
-                  ],
-                ),
+                  if (_recentEvents.isEmpty)
+                    Padding(
+                      padding: UIConstants.paddingLG,
+                      child: Row(
+                        children: [
+                          Icon(
+                            IconlyBroken.notification,
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.5,
+                            ),
+                          ),
+                          const SizedBox(width: UIConstants.spacingSM),
+                          Expanded(
+                            child: Text(
+                              'Listening for real-time events...',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurface.withValues(
+                                  alpha: 0.5,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    for (final event in _recentEvents) _EventTile(event: event),
+                  const SizedBox(height: 8),
+                ],
               ),
+            ),
+
+            // Bottom spacer for floating nav
+            const SizedBox(height: 80),
           ],
         ),
       ),
@@ -284,47 +459,36 @@ class _EventTile extends StatelessWidget {
   IconData get _icon {
     switch (event.type) {
       case ServerEvent.nodeJoined:
-        return Icons.add_circle_outline;
+        return IconlyBroken.add_user;
       case ServerEvent.nodeLeft:
-        return Icons.remove_circle_outline;
+        return IconlyBroken.delete;
       case ServerEvent.nodeStatusChanged:
-        return Icons.swap_horiz;
+        return IconlyBroken.swap;
       case ServerEvent.clusterCreated:
-        return Icons.cloud;
+        return IconlyBroken.discovery;
       case ServerEvent.clusterDeleted:
-        return Icons.cloud_off;
+        return IconlyBroken.close_square;
       case ServerEvent.metricsUpdate:
-        return Icons.show_chart;
+        return IconlyBroken.chart;
       default:
-        return Icons.info_outline;
+        return IconlyBroken.info_circle;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final time =
-        '${event.timestamp.hour.toString().padLeft(2, '0')}:${event.timestamp.minute.toString().padLeft(2, '0')}:${event.timestamp.second.toString().padLeft(2, '0')}';
-
-    return ListTile(
-      dense: true,
-      leading: Icon(_icon, size: UIConstants.iconMD),
-      title: Text(
-        event.type.replaceAll('_', ' ').toUpperCase(),
-        style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
-      ),
-      subtitle: Text(
-        event.nodeId ?? event.clusterId ?? '',
-        style: theme.textTheme.labelSmall,
-      ),
-      trailing: Text(time, style: theme.textTheme.labelSmall),
+    return ActionTile(
+      icon: _icon,
+      title: event.type.replaceAll('_', ' ').toUpperCase(),
+      onTap: () {},
     );
   }
 }
 
 /// Real Settings page with server configuration, sign out, and app info.
 class _SettingsPage extends ConsumerStatefulWidget {
-  const _SettingsPage();
+  const _SettingsPage({this.scrollController});
+  final ScrollController? scrollController;
 
   @override
   ConsumerState<_SettingsPage> createState() => _SettingsPageState();
@@ -392,9 +556,10 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
     final currentServerUrl = ref.watch(serverUrlProvider);
     final authState = ref.watch(authProvider);
 
-    return Scaffold(
-      appBar: BlurredAppBar(title: 'Settings'),
+    return FrostedScaffold(
+      title: 'Settings',
       body: ListView(
+        controller: widget.scrollController,
         children: [
           const SizedBox(height: UIConstants.spacingMD),
 
@@ -410,8 +575,8 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
             ),
           ),
           if (authState.user != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            FrostedGlass(
+              padding: UIConstants.paddingLG,
               child: Row(
                 children: [
                   CircleAvatar(
@@ -439,7 +604,9 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
                         Text(
                           authState.user!.email,
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.6,
+                            ),
                           ),
                         ),
                         if (authState.user!.role != 'viewer')
@@ -447,21 +614,21 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
                             padding: const EdgeInsets.only(
                               top: UIConstants.spacingXS,
                             ),
-                            child: Container(
+                            child: FrostedGlass(
+                              borderRadius: BorderRadius.circular(
+                                UIConstants.radiusSmall,
+                              ),
                               padding: const EdgeInsets.symmetric(
                                 horizontal: UIConstants.spacingSM,
                                 vertical: 2,
                               ),
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.primaryContainer,
-                                borderRadius: BorderRadius.circular(
-                                  UIConstants.radiusSmall,
-                                ),
-                              ),
+                              shadow: false,
+                              tintColor: theme.colorScheme.primary,
+                              opacity: 0.15,
                               child: Text(
                                 authState.user!.role.toUpperCase(),
                                 style: theme.textTheme.labelSmall?.copyWith(
-                                  color: theme.colorScheme.onPrimaryContainer,
+                                  color: theme.colorScheme.primary,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
@@ -473,14 +640,15 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
                 ],
               ),
             ),
+          const SizedBox(height: UIConstants.spacingSM),
           ActionTile(
-            icon: Icons.logout,
+            icon: IconlyBroken.logout,
             title: 'Sign Out',
             isDestructive: true,
             onTap: _confirmSignOut,
           ),
 
-          const Divider(height: 32),
+          const SizedBox(height: UIConstants.spacingLG),
 
           // --- Server section ---
           Padding(
@@ -494,7 +662,7 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
             ),
           ),
           ActionTile(
-            icon: Icons.dns_outlined,
+            icon: IconlyBroken.shield_done,
             title: 'Server URL',
             onTap: _editServerUrl,
           ),
@@ -503,12 +671,12 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
             child: Text(
               currentServerUrl,
               style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
               ),
             ),
           ),
 
-          const Divider(height: 32),
+          const SizedBox(height: UIConstants.spacingLG),
 
           // --- About section ---
           Padding(
@@ -522,7 +690,7 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
             ),
           ),
           ActionTile(
-            icon: Icons.info_outline,
+            icon: IconlyBroken.info_circle,
             title: 'App Version',
             onTap: () {
               AppAlertDialog.showInfo(
@@ -533,6 +701,9 @@ class _SettingsPageState extends ConsumerState<_SettingsPage> {
               );
             },
           ),
+
+          // Bottom spacer for floating nav
+          const SizedBox(height: 80),
         ],
       ),
     );

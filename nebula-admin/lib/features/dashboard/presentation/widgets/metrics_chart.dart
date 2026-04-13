@@ -19,13 +19,27 @@ class MetricsChart extends StatelessWidget {
     final theme = Theme.of(context);
 
     if (nodes.isEmpty) {
-      return SizedBox(
-        height: 200,
-        child: Center(
-          child: Text(
-            'No node data available',
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+      return FrostedGlass(
+        padding: UIConstants.paddingLG,
+        child: SizedBox(
+          height: 200,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  IconlyBroken.chart,
+                  size: 48,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.3),
+                ),
+                const SizedBox(height: UIConstants.spacingSM),
+                Text(
+                  'No node data available',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -40,109 +54,101 @@ class MetricsChart extends StatelessWidget {
       cpuSpots.add(FlSpot(i.toDouble(), nodes[i].cpuLoad * 100));
     }
 
-    return Card(
-      child: Padding(
-        padding: UIConstants.paddingLG,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Node Metrics',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
+    return FrostedGlass(
+      padding: UIConstants.paddingLG,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Node Metrics',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
             ),
-            const SizedBox(height: UIConstants.spacingSM),
-            _Legend(theme: theme),
-            const SizedBox(height: UIConstants.spacingMD),
-            SizedBox(
-              height: 200,
-              child: LineChart(
-                LineChartData(
-                  gridData: FlGridData(
-                    show: true,
-                    drawVerticalLine: false,
-                    horizontalInterval: 25,
-                    getDrawingHorizontalLine: (value) => FlLine(
-                      color: theme.colorScheme.outlineVariant.withAlpha(80),
-                      strokeWidth: 1,
-                    ),
+          ),
+          const SizedBox(height: UIConstants.spacingSM),
+          _Legend(theme: theme),
+          const SizedBox(height: UIConstants.spacingMD),
+          SizedBox(
+            height: 200,
+            child: LineChart(
+              LineChartData(
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  horizontalInterval: 25,
+                  getDrawingHorizontalLine: (value) => FlLine(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.1),
+                    strokeWidth: 1,
                   ),
-                  titlesData: FlTitlesData(
-                    leftTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: 40,
-                        interval: 25,
-                        getTitlesWidget: (value, meta) => Text(
-                          '${value.toInt()}%',
-                          style: theme.textTheme.labelSmall,
-                        ),
+                ),
+                titlesData: FlTitlesData(
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 40,
+                      interval: 25,
+                      getTitlesWidget: (value, meta) => Text(
+                        '${value.toInt()}%',
+                        style: theme.textTheme.labelSmall,
                       ),
                     ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        interval: 1,
-                        getTitlesWidget: (value, meta) {
-                          final idx = value.toInt();
-                          if (idx < 0 || idx >= nodes.length) {
-                            return const SizedBox.shrink();
-                          }
-                          final id = nodes[idx].nodeId;
-                          final label = id.length > 6 ? id.substring(0, 6) : id;
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Text(
-                              label,
-                              style: theme.textTheme.labelSmall,
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    topTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false),
-                    ),
-                    rightTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false),
-                    ),
                   ),
-                  borderData: FlBorderData(show: false),
-                  minY: 0,
-                  maxY: 100,
-                  lineBarsData: [
-                    _lineData(
-                      spots: batterySpots,
-                      color: MannyTheme.tertiaryTeal,
-                    ),
-                    _lineData(
-                      spots: cpuSpots,
-                      color: theme.colorScheme.primary,
-                    ),
-                  ],
-                  lineTouchData: LineTouchData(
-                    touchTooltipData: LineTouchTooltipData(
-                      getTooltipItems: (touchedSpots) {
-                        return touchedSpots.map((spot) {
-                          final label = spot.barIndex == 0 ? 'Battery' : 'CPU';
-                          return LineTooltipItem(
-                            '$label: ${spot.y.toStringAsFixed(0)}%',
-                            TextStyle(
-                              color: spot.bar.color,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 12,
-                            ),
-                          );
-                        }).toList();
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      interval: 1,
+                      getTitlesWidget: (value, meta) {
+                        final idx = value.toInt();
+                        if (idx < 0 || idx >= nodes.length) {
+                          return const SizedBox.shrink();
+                        }
+                        final id = nodes[idx].nodeId;
+                        final label = id.length > 6 ? id.substring(0, 6) : id;
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(label, style: theme.textTheme.labelSmall),
+                        );
                       },
                     ),
+                  ),
+                  topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                ),
+                borderData: FlBorderData(show: false),
+                minY: 0,
+                maxY: 100,
+                lineBarsData: [
+                  _lineData(
+                    spots: batterySpots,
+                    color: theme.colorScheme.tertiary,
+                  ),
+                  _lineData(spots: cpuSpots, color: theme.colorScheme.primary),
+                ],
+                lineTouchData: LineTouchData(
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipItems: (touchedSpots) {
+                      return touchedSpots.map((spot) {
+                        final label = spot.barIndex == 0 ? 'Battery' : 'CPU';
+                        return LineTooltipItem(
+                          '$label: ${spot.y.toStringAsFixed(0)}%',
+                          TextStyle(
+                            color: spot.bar.color,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                          ),
+                        );
+                      }).toList();
+                    },
                   ),
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -180,7 +186,7 @@ class _Legend extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        _LegendItem(color: MannyTheme.tertiaryTeal, label: 'Battery %'),
+        _LegendItem(color: theme.colorScheme.tertiary, label: 'Battery %'),
         const SizedBox(width: UIConstants.spacingLG),
         _LegendItem(color: theme.colorScheme.primary, label: 'CPU %'),
       ],
