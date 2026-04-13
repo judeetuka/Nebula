@@ -8,8 +8,7 @@ class NodeListTile extends StatelessWidget {
 
   const NodeListTile({super.key, required this.node});
 
-  Color _statusColor(BuildContext context) {
-    final theme = Theme.of(context);
+  Color _statusColor(ThemeData theme) {
     switch (node.status) {
       case 'online':
         return Colors.green;
@@ -22,34 +21,50 @@ class NodeListTile extends StatelessWidget {
     }
   }
 
+  String get _statusLabel {
+    switch (node.status) {
+      case 'online':
+        return 'Online';
+      case 'busy':
+        return 'Busy';
+      case 'offline':
+        return 'Offline';
+      default:
+        return 'Unknown';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final truncatedId = node.nodeId.length > 10
-        ? '${node.nodeId.substring(0, 10)}...'
-        : node.nodeId;
+    final statusColor = _statusColor(theme);
+    final truncatedId =
+        node.nodeId.length > 12 ? '${node.nodeId.substring(0, 12)}...' : node.nodeId;
     final batteryFraction = node.batteryLevel / 100.0;
+    final cpuPercent = (node.cpuLoad * 100).toStringAsFixed(0);
 
     return FrostedGlass(
-      padding: const EdgeInsets.all(14),
+      borderRadius: BorderRadius.circular(UIConstants.radiusLarge),
+      padding: const EdgeInsets.all(UIConstants.spacingLG),
       child: Row(
         children: [
-          // Status icon
+          // Status icon with colored background
           Container(
-            padding: const EdgeInsets.all(10),
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
-              color: _statusColor(context).withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(12),
+              color: statusColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(UIConstants.radiusMedium),
             ),
             child: Icon(
               IconlyBold.discovery,
-              color: _statusColor(context),
-              size: UIConstants.iconMD,
+              color: statusColor,
+              size: 22,
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: UIConstants.spacingMD),
 
-          // Node info
+          // Node ID + role badge + status badge
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -57,44 +72,68 @@ class NodeListTile extends StatelessWidget {
                 Text(
                   truncatedId,
                   style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.2,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 6),
                 Row(
                   children: [
                     // Role badge
                     FrostedGlass(
-                      borderRadius: BorderRadius.circular(
-                        UIConstants.radiusSmall,
-                      ),
+                      borderRadius: BorderRadius.circular(6),
                       padding: const EdgeInsets.symmetric(
                         horizontal: UIConstants.spacingSM,
-                        vertical: 2,
+                        vertical: 3,
                       ),
                       shadow: false,
-                      tintColor: theme.colorScheme.secondary,
-                      opacity: 0.15,
+                      tintColor: theme.colorScheme.primary,
+                      opacity: 0.1,
                       child: Text(
-                        node.role,
+                        node.role.toUpperCase(),
                         style: theme.textTheme.labelSmall?.copyWith(
-                          color: theme.colorScheme.secondary,
-                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 10,
+                          letterSpacing: 0.8,
                         ),
                       ),
                     ),
                     const SizedBox(width: UIConstants.spacingSM),
-                    Icon(
-                      IconlyBroken.chart,
-                      size: UIConstants.iconSM,
-                      color: node.batteryLevel > 20
-                          ? theme.colorScheme.onSurface.withValues(alpha: 0.5)
-                          : theme.colorScheme.error,
-                    ),
-                    const SizedBox(width: UIConstants.spacingXS),
-                    Text(
-                      '${node.batteryLevel}%',
-                      style: theme.textTheme.bodySmall,
+
+                    // Status badge
+                    FrostedGlass(
+                      borderRadius: BorderRadius.circular(6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: UIConstants.spacingSM,
+                        vertical: 3,
+                      ),
+                      shadow: false,
+                      tintColor: statusColor,
+                      opacity: 0.1,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: statusColor,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _statusLabel,
+                            style: TextStyle(
+                              color: statusColor,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 10,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -102,31 +141,70 @@ class NodeListTile extends StatelessWidget {
             ),
           ),
 
-          // CPU indicator
+          // CPU + Battery metric columns
           SizedBox(
-            width: 80,
+            width: 96,
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Text(
-                  'CPU ${(node.cpuLoad * 100).toStringAsFixed(0)}%',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+                // CPU
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Icon(
+                      IconlyBroken.activity,
+                      size: 13,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'CPU $cpuPercent%',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: UIConstants.spacingXS),
+                const SizedBox(height: 5),
                 ProgressBar(
                   progress: node.cpuLoad,
-                  height: 6,
+                  height: 5,
                   progressColor: node.cpuLoad > 0.8
                       ? theme.colorScheme.error
                       : theme.colorScheme.primary,
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: UIConstants.spacingSM),
+
+                // Battery
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Icon(
+                      IconlyBroken.chart,
+                      size: 13,
+                      color: node.batteryLevel > 20
+                          ? theme.colorScheme.onSurface.withValues(alpha: 0.5)
+                          : theme.colorScheme.error,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'BAT ${node.batteryLevel}%',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: node.batteryLevel > 20
+                            ? theme.colorScheme.onSurface.withValues(alpha: 0.7)
+                            : theme.colorScheme.error,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 5),
                 ProgressBar(
                   progress: batteryFraction,
-                  height: 6,
+                  height: 5,
                   progressColor: node.batteryLevel > 20
                       ? theme.colorScheme.tertiary
                       : theme.colorScheme.error,

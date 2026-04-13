@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:manny_ui/manny_ui.dart';
@@ -40,9 +41,7 @@ class _CreateClusterPageState extends ConsumerState<CreateClusterPage> {
     } else {
       final error = ref.read(clustersProvider).error;
       if (error != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error)),
-        );
+        NotificationToast.error(context, error);
       }
     }
   }
@@ -51,78 +50,146 @@ class _CreateClusterPageState extends ConsumerState<CreateClusterPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Create Cluster'),
-      ),
+    return FrostedScaffold(
+      title: 'New Cluster',
       body: Center(
         child: SingleChildScrollView(
-          padding: UIConstants.paddingXL,
+          padding: const EdgeInsets.symmetric(
+            horizontal: UIConstants.spacingXL,
+            vertical: UIConstants.spacingXXL,
+          ),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 500),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Icon(
-                    Icons.add_circle_outline,
-                    size: 56,
-                    color: theme.colorScheme.primary,
-                  ),
-                  const SizedBox(height: UIConstants.spacingLG),
-                  Text(
-                    'New Compute Cluster',
-                    style: theme.textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: FrostedGlass(
+              borderRadius: BorderRadius.circular(20),
+              padding: const EdgeInsets.all(UIConstants.spacingXL),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Icon header
+                    Center(
+                      child: Container(
+                        width: 64,
+                        height: 64,
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Icon(
+                          IconlyBold.plus,
+                          size: 30,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
                     ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: UIConstants.spacingSM),
-                  Text(
-                    'Give your cluster a name to get started',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+                    const SizedBox(height: UIConstants.spacingXL),
+
+                    // Title
+                    Text(
+                      'Create Compute Cluster',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: -0.5,
+                      ),
+                      textAlign: TextAlign.center,
                     ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: UIConstants.spacingXXL),
-                  TextFormField(
-                    controller: _nameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Cluster Name',
-                      hintText: 'e.g. Production Alpha',
-                      prefixIcon: Icon(Icons.cloud_outlined),
+                    const SizedBox(height: UIConstants.spacingSM),
+
+                    // Subtitle
+                    Text(
+                      'Give your cluster a name to get started',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                      ),
+                      textAlign: TextAlign.center,
                     ),
-                    textInputAction: TextInputAction.done,
-                    autofocus: true,
-                    onFieldSubmitted: (_) => _handleCreate(),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Cluster name is required';
-                      }
-                      if (value.trim().length < 3) {
-                        return 'Name must be at least 3 characters';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: UIConstants.spacingXL),
-                  SizedBox(
-                    height: UIConstants.buttonLG,
-                    child: FilledButton(
-                      onPressed: _isCreating ? null : _handleCreate,
-                      child: _isCreating
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Create Cluster'),
+                    const SizedBox(height: UIConstants.spacingXXL),
+
+                    // Name field inside a frosted container
+                    FrostedGlass(
+                      borderRadius: BorderRadius.circular(UIConstants.radiusMedium),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: UIConstants.spacingLG,
+                        vertical: UIConstants.spacingXS,
+                      ),
+                      shadow: false,
+                      opacity: 0.08,
+                      child: TextFormField(
+                        controller: _nameController,
+                        decoration: InputDecoration(
+                          labelText: 'Cluster Name',
+                          hintText: 'e.g. Production Alpha',
+                          prefixIcon: Icon(
+                            IconlyBroken.discovery,
+                            color: theme.colorScheme.primary.withValues(alpha: 0.7),
+                          ),
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          errorBorder: InputBorder.none,
+                          focusedErrorBorder: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: UIConstants.spacingMD,
+                          ),
+                        ),
+                        textInputAction: TextInputAction.done,
+                        autofocus: true,
+                        onFieldSubmitted: (_) => _handleCreate(),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Cluster name is required';
+                          }
+                          if (value.trim().length < 3) {
+                            return 'Name must be at least 3 characters';
+                          }
+                          return null;
+                        },
+                      ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: UIConstants.spacingXL),
+
+                    // Create button
+                    SizedBox(
+                      height: UIConstants.buttonLG,
+                      child: FilledButton(
+                        onPressed: _isCreating ? null : _handleCreate,
+                        style: FilledButton.styleFrom(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(
+                              UIConstants.radiusMedium,
+                            ),
+                          ),
+                        ),
+                        child: _isCreating
+                            ? SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CupertinoActivityIndicator(
+                                  color: theme.colorScheme.onPrimary,
+                                ),
+                              )
+                            : Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(IconlyBold.plus, size: 18,
+                                    color: theme.colorScheme.onPrimary),
+                                  const SizedBox(width: UIConstants.spacingSM),
+                                  Text(
+                                    'Create Cluster',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      color: theme.colorScheme.onPrimary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

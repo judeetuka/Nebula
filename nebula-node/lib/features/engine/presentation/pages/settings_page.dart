@@ -13,20 +13,41 @@ class SettingsPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final statusAsync = ref.watch(nodeStatusStreamProvider);
 
-    return Scaffold(
-      appBar: BlurredAppBar(
-        title: 'Settings',
-        centerTitle: true,
-      ),
+    return FrostedScaffold(
+      title: 'Settings',
       body: statusAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => const Center(
+          child: Padding(
+            padding: UIConstants.paddingXL,
+            child: ProgressBar(progress: 1.0, height: 6),
+          ),
+        ),
         error: (error, _) => Center(
           child: Padding(
             padding: UIConstants.paddingXL,
-            child: Text(
-              'Failed to load node info: $error',
-              style: Theme.of(context).textTheme.bodyMedium,
-              textAlign: TextAlign.center,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  IconlyBold.danger,
+                  size: 40,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+                const SizedBox(height: UIConstants.spacingLG),
+                Text(
+                  'Failed to load node info',
+                  style: Theme.of(context).textTheme.titleMedium,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: UIConstants.spacingSM),
+                Text(
+                  error.toString(),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
             ),
           ),
         ),
@@ -40,43 +61,42 @@ class SettingsPage extends ConsumerWidget {
     WidgetRef ref,
     dynamic status,
   ) {
-    final theme = Theme.of(context);
-
     return SingleChildScrollView(
       padding: UIConstants.paddingXL,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Node Info section
-          Text(
-            'Node Info',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
+          // -- Node Information section --
+          _SectionHeader(
+            icon: IconlyBold.info_circle,
+            label: 'Node Information',
           ),
-          const SizedBox(height: UIConstants.spacingSM),
-          Card(
-            clipBehavior: Clip.antiAlias,
+          const SizedBox(height: UIConstants.spacingMD),
+          FrostedGlass(
+            borderRadius: BorderRadius.circular(UIConstants.radiusLarge),
+            padding: const EdgeInsets.symmetric(vertical: 4),
             child: Column(
               children: [
                 ActionTile(
-                  icon: Icons.fingerprint,
+                  icon: IconlyBroken.document,
                   title: 'Node ID: ${_truncateId(status.nodeId)}',
-                  onTap: () => _copyToClipboard(context, status.nodeId, 'Node ID'),
+                  onTap: () =>
+                      _copyToClipboard(context, status.nodeId, 'Node ID'),
                 ),
-                const Divider(height: 1),
+                _thinDivider(context),
                 ActionTile(
-                  icon: Icons.cloud_outlined,
+                  icon: IconlyBroken.discovery,
                   title: 'Cluster: ${status.clusterId ?? "Not joined"}',
                   onTap: () {
                     if (status.clusterId != null) {
-                      _copyToClipboard(context, status.clusterId!, 'Cluster ID');
+                      _copyToClipboard(
+                          context, status.clusterId!, 'Cluster ID');
                     }
                   },
                 ),
-                const Divider(height: 1),
+                _thinDivider(context),
                 ActionTile(
-                  icon: Icons.circle,
+                  icon: IconlyBroken.activity,
                   title: 'State: ${status.state}',
                   onTap: () {},
                 ),
@@ -84,39 +104,38 @@ class SettingsPage extends ConsumerWidget {
             ),
           ),
 
-          const SizedBox(height: UIConstants.spacingXL),
+          const SizedBox(height: UIConstants.spacingXXL),
 
-          // Actions section
-          Text(
-            'Actions',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
+          // -- Actions section --
+          _SectionHeader(
+            icon: IconlyBold.category,
+            label: 'Actions',
           ),
-          const SizedBox(height: UIConstants.spacingSM),
-          Card(
-            clipBehavior: Clip.antiAlias,
+          const SizedBox(height: UIConstants.spacingMD),
+          FrostedGlass(
+            borderRadius: BorderRadius.circular(UIConstants.radiusLarge),
+            padding: const EdgeInsets.symmetric(vertical: 4),
             child: Column(
               children: [
                 if (status.isConfigured) ...[
                   ActionTile(
-                    icon: Icons.logout,
+                    icon: IconlyBroken.logout,
                     title: 'Leave Cluster',
                     isDestructive: true,
                     onTap: () => _confirmLeaveCluster(context, ref),
                   ),
-                  const Divider(height: 1),
+                  _thinDivider(context),
                 ],
                 ActionTile(
-                  icon: Icons.article_outlined,
+                  icon: IconlyBroken.paper,
                   title: 'View Logs',
                   onTap: () {
                     NotificationToast.info(context, 'Log viewer coming soon');
                   },
                 ),
-                const Divider(height: 1),
+                _thinDivider(context),
                 ActionTile(
-                  icon: Icons.restart_alt,
+                  icon: IconlyBroken.swap,
                   title: 'Restart Engine',
                   onTap: () => _confirmRestart(context, ref),
                 ),
@@ -124,36 +143,47 @@ class SettingsPage extends ConsumerWidget {
             ),
           ),
 
-          const SizedBox(height: UIConstants.spacingXL),
+          const SizedBox(height: UIConstants.spacingXXL),
 
-          // About section
-          Text(
-            'About',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
-            ),
+          // -- About section --
+          _SectionHeader(
+            icon: IconlyBold.bookmark,
+            label: 'About',
           ),
-          const SizedBox(height: UIConstants.spacingSM),
-          Card(
-            clipBehavior: Clip.antiAlias,
+          const SizedBox(height: UIConstants.spacingMD),
+          FrostedGlass(
+            borderRadius: BorderRadius.circular(UIConstants.radiusLarge),
+            padding: const EdgeInsets.symmetric(vertical: 4),
             child: Column(
               children: [
                 ActionTile(
-                  icon: Icons.info_outline,
+                  icon: IconlyBroken.info_circle,
                   title: 'App Version: 0.1.0',
                   onTap: () {},
                 ),
-                const Divider(height: 1),
+                _thinDivider(context),
                 ActionTile(
-                  icon: Icons.memory,
+                  icon: IconlyBroken.chart,
                   title: 'Engine Version: 0.1.0',
                   onTap: () {},
                 ),
               ],
             ),
           ),
+
+          const SizedBox(height: UIConstants.spacingXXL),
         ],
       ),
+    );
+  }
+
+  Widget _thinDivider(BuildContext context) {
+    return Divider(
+      height: 1,
+      thickness: 0.5,
+      indent: UIConstants.spacingXL,
+      endIndent: UIConstants.spacingXL,
+      color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.3),
     );
   }
 
@@ -182,7 +212,6 @@ class SettingsPage extends ConsumerWidget {
   Future<void> _leaveCluster(BuildContext context, WidgetRef ref) async {
     final repository = ref.read(engineRepositoryProvider);
     await repository.shutdownEngine();
-    // Navigate back to welcome screen after leaving
     if (context.mounted) {
       NotificationToast.info(context, 'Left cluster');
       Navigator.of(context).pushNamedAndRemoveUntil(
@@ -212,5 +241,36 @@ class SettingsPage extends ConsumerWidget {
     if (context.mounted) {
       NotificationToast.success(context, 'Engine restarted');
     }
+  }
+}
+
+/// Reusable section header with icon and label.
+class _SectionHeader extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _SectionHeader({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Row(
+      children: [
+        Icon(
+          icon,
+          size: UIConstants.iconMD,
+          color: theme.colorScheme.primary,
+        ),
+        const SizedBox(width: UIConstants.spacingSM),
+        Text(
+          label,
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.bold,
+            color: theme.colorScheme.primary,
+          ),
+        ),
+      ],
+    );
   }
 }

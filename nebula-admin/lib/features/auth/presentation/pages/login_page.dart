@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:manny_ui/manny_ui.dart';
@@ -238,8 +239,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
                                           ? SizedBox(
                                               height: 20,
                                               width: 20,
-                                              child: CircularProgressIndicator(
-                                                strokeWidth: 2,
+                                              child: CupertinoActivityIndicator(
                                                 color: cs.onPrimary,
                                               ),
                                             )

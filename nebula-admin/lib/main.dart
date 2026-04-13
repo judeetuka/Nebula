@@ -21,8 +21,28 @@ void main() async {
   );
 }
 
-class NebulaAdminApp extends StatelessWidget {
+class NebulaAdminApp extends StatefulWidget {
   const NebulaAdminApp({super.key});
+
+  /// Access from anywhere to toggle theme.
+  static _NebulaAdminAppState of(BuildContext context) =>
+      context.findAncestorStateOfType<_NebulaAdminAppState>()!;
+
+  @override
+  State<NebulaAdminApp> createState() => _NebulaAdminAppState();
+}
+
+class _NebulaAdminAppState extends State<NebulaAdminApp> {
+  ThemeMode _themeMode = ThemeMode.dark;
+
+  void toggleTheme() {
+    setState(() {
+      _themeMode =
+          _themeMode == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
+    });
+  }
+
+  bool get isDark => _themeMode == ThemeMode.dark;
 
   // ── HUD Theme Palette ──
   static final _lightTheme = MannyTheme.lightTheme.copyWith(
@@ -55,17 +75,20 @@ class NebulaAdminApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'NEBULA Admin',
-      debugShowCheckedModeBanner: false,
-      theme: _lightTheme,
-      darkTheme: _darkTheme,
-      themeMode: ThemeMode.system,
-      scrollBehavior: MannyScrollBehavior().copyWith(
-        physics: const ClampingScrollPhysics(),
+    return MannyConfig(
+      neumorphic: true,
+      child: MaterialApp(
+        title: 'NEBULA Admin',
+        debugShowCheckedModeBanner: false,
+        theme: _lightTheme,
+        darkTheme: _darkTheme,
+        themeMode: _themeMode,
+        scrollBehavior: MannyScrollBehavior().copyWith(
+          physics: const ClampingScrollPhysics(),
+        ),
+        initialRoute: AppRoutes.login,
+        onGenerateRoute: generateRoute,
       ),
-      initialRoute: AppRoutes.login,
-      onGenerateRoute: generateRoute,
     );
   }
 }
