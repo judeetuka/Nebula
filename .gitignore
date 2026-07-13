@@ -37,3 +37,7 @@ blob-report/
 **/frb_generated.*
 firebase-debug.log
 *.db
+
+# Separate repositories — excluded from this project
+shared/
+ui_showcase/
