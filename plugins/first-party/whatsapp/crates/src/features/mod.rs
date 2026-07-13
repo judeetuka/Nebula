@@ -11,7 +11,10 @@ pub use blocking::{Blocking, BlocklistEntry};
 
 pub use chatstate::{ChatStateType, Chatstate};
 
-pub use contacts::{ContactInfo, Contacts, IsOnWhatsAppResult, ProfilePicture, UserInfo};
+pub use contacts::{
+    BusinessMessageLinkTarget, ContactInfo, ContactQRLinkTarget, Contacts, IsOnWhatsAppResult,
+    ProfilePicture, UserInfo,
+};
 
 pub use groups::{
     CreateGroupResult, GroupCreateOptions, GroupDescription, GroupMetadata, GroupParticipant,

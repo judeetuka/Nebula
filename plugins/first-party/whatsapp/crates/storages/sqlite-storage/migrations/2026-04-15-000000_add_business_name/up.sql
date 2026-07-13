@@ -1,0 +1,1 @@
+ALTER TABLE contacts ADD COLUMN business_name TEXT NOT NULL DEFAULT '';

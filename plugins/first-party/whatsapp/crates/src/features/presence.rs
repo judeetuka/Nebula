@@ -89,7 +89,12 @@ impl<'a> Presence<'a> {
     /// Subscribe to a contact's presence updates.
     ///
     /// Sends a `<presence type="subscribe">` stanza to the target JID.
-    /// If a valid tctoken exists for the contact, it is included as a child node.
+    /// If a valid privacy token (tctoken) exists for the contact, it is included
+    /// as a child node. Without the token the subscription may still succeed but
+    /// the server could withhold some presence data for privacy-conscious contacts.
+    ///
+    /// Mirrors whatsmeow's `SubscribePresence`: the token is looked up via
+    /// `ProtocolStore::get_tc_token` (resolved through LID where possible).
     ///
     /// ## Wire Format
     /// ```xml
@@ -104,9 +109,19 @@ impl<'a> Presence<'a> {
             .attr("type", "subscribe")
             .attr("to", jid.to_string());
 
-        // Include tctoken if available (no t attribute, matching WhatsApp Web)
-        if let Some(token) = self.client.lookup_tc_token_for_jid(jid).await {
-            builder = builder.children([build_tc_token_node(&token)]);
+        // Privacy token lookup (matches whatsmeow's SubscribePresence).
+        // The token comes from ProtocolStore::get_tc_token, resolved through the
+        // LID-PN cache when the target JID is a phone number.
+        match self.client.lookup_tc_token_for_jid(jid).await {
+            Some(token) => {
+                builder = builder.children([build_tc_token_node(&token)]);
+            }
+            None => {
+                debug!(
+                    "presence subscribe: no privacy token for {} — subscribing without tctoken",
+                    jid
+                );
+            }
         }
 
         let node = builder.build();

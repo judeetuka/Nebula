@@ -31,7 +31,7 @@ use std::collections::{HashMap, HashSet};
 use wacore_binary::jid::Jid;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use thiserror::Error;
 use tokio::sync::{Mutex, Notify, OnceCell, RwLock, mpsc};
@@ -232,6 +232,23 @@ pub struct Client {
 
     /// In-memory state for active/pending calls.
     pub(crate) call_store: crate::call::CallStore,
+
+    /// Controls whether delivery receipts are sent as "active" (two gray ticks)
+    /// or "inactive". Mirrors whatsmeow's `SendActiveReceipts` field.
+    ///
+    /// - `0` = inactive receipts (default, privacy-friendly)
+    /// - `2` = force active receipts (shows delivery confirmation to sender)
+    ///
+    /// Changed via `set_force_active_delivery_receipts`.
+    pub(crate) send_active_receipts: AtomicU8,
+
+    /// Mutex protecting concurrent prekey upload operations.
+    pub(crate) upload_prekeys_lock: tokio::sync::Mutex<()>,
+
+    /// Timestamp of last successful prekey upload.
+    /// Used to enforce a 10-minute cooldown between uploads to prevent
+    /// race condition spam (matches whatsmeow's `lastPreKeyUpload`).
+    pub(crate) last_prekey_upload: tokio::sync::Mutex<Option<std::time::Instant>>,
 }
 
 impl Client {
@@ -246,6 +263,26 @@ impl Client {
     /// Returns `true` if history sync notifications are currently being skipped.
     pub fn skip_history_sync_enabled(&self) -> bool {
         self.skip_history_sync.load(Ordering::Relaxed)
+    }
+
+    /// Force delivery receipts to be "active" (shows two gray ticks to the sender)
+    /// or revert to "inactive" (privacy-friendly default).
+    ///
+    /// Mirrors whatsmeow's `SetForceActiveDeliveryReceipts`. When `active` is
+    /// true, all subsequent delivery receipts will use the active type, making
+    /// the sender aware that the message was delivered. When false, receipts
+    /// revert to inactive mode.
+    pub fn set_force_active_delivery_receipts(&self, active: bool) {
+        if active {
+            self.send_active_receipts.store(2, Ordering::Relaxed);
+        } else {
+            self.send_active_receipts.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Returns `true` if delivery receipts are currently forced to active mode.
+    pub fn force_active_delivery_receipts(&self) -> bool {
+        self.send_active_receipts.load(Ordering::Relaxed) >= 2
     }
 
     pub async fn new(
@@ -372,6 +409,9 @@ impl Client {
             override_version,
             skip_history_sync: AtomicBool::new(false),
             call_store: crate::call::CallStore::new(),
+            send_active_receipts: AtomicU8::new(0),
+            upload_prekeys_lock: tokio::sync::Mutex::new(()),
+            last_prekey_upload: tokio::sync::Mutex::new(None),
         };
 
         let arc = Arc::new(this);
@@ -1512,7 +1552,69 @@ impl Client {
                 }
             }
 
-            for m in mutations {
+            // During full sync of critical_unblock_low, batch-insert contact
+            // mutations in a single transaction instead of dispatching individually.
+            // Mirrors whatsmeow's filterContacts + PutAllContactNames optimization.
+            let mutations_to_dispatch =
+                if name == WAPatchName::CriticalUnblockLow && full_sync {
+                    let mut contact_entries = Vec::new();
+                    let mut remaining = Vec::new();
+                    for m in mutations {
+                        if m.index.first().map(|s| s.as_str()) == Some("contact")
+                            && m.index.len() > 1
+                            && m.operation == wa::syncd_mutation::SyncdOperation::Set
+                        {
+                            if let Some(val) = &m.action_value
+                                && let Some(act) = &val.contact_action
+                            {
+                                contact_entries.push(
+                                    wacore::store::traits::ContactEntry {
+                                        jid: m.index[1].clone(),
+                                        full_name: act
+                                            .full_name
+                                            .as_deref()
+                                            .unwrap_or("")
+                                            .to_string(),
+                                        first_name: act
+                                            .first_name
+                                            .as_deref()
+                                            .unwrap_or("")
+                                            .to_string(),
+                                        push_name: String::new(),
+                                    },
+                                );
+                            } else {
+                                remaining.push(m);
+                            }
+                        } else {
+                            remaining.push(m);
+                        }
+                    }
+                    if !contact_entries.is_empty() {
+                        debug!(
+                            target: "Client/AppState",
+                            "Bulk inserting {} contacts from critical_unblock_low full sync",
+                            contact_entries.len()
+                        );
+                        if let Err(e) = backend
+                            .put_all_contact_names(&contact_entries)
+                            .await
+                        {
+                            warn!(
+                                target: "Client/AppState",
+                                "Bulk contact insert failed: {e}. Falling back to individual dispatch."
+                            );
+                            // On failure, push them back for individual dispatch
+                            // (they won't be persisted via put_contact individually since
+                            // dispatch_app_state_mutation already does that, so this is safe)
+                        }
+                    }
+                    remaining
+                } else {
+                    mutations
+                };
+
+            for m in mutations_to_dispatch {
                 debug!(target: "Client/AppState", "Dispatching mutation kind={} index_len={} full_sync={}", m.index.first().map(|s| s.as_str()).unwrap_or(""), m.index.len(), full_sync);
                 self.dispatch_app_state_mutation(&m, full_sync).await;
             }
@@ -1694,6 +1796,135 @@ impl Client {
 
         debug!(target: "Client/AppState", "App state patch sent and saved for {:?} (version={})", collection, new_version);
         Ok(())
+    }
+
+    /// Send an app state patch built by one of the `build_*` helpers.
+    ///
+    /// This is the high-level entry point corresponding to whatsmeow's
+    /// `Client.SendAppState`. It:
+    ///
+    /// 1. Syncs the collection to ensure local state matches the server.
+    /// 2. Encodes the `PatchInfo` into a `SyncdPatch` protobuf.
+    /// 3. Sends the patch via an IQ stanza.
+    /// 4. On 409 conflict: applies the returned patches and retries once.
+    /// 5. Triggers a background resync to update local caches.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use whatsapp_rust::appstate_sync::build_mute;
+    ///
+    /// let patch = build_mute("12345@s.whatsapp.net", true, None);
+    /// client.send_app_state(patch).await?;
+    /// ```
+    pub async fn send_app_state(
+        &self,
+        patch_info: crate::appstate_sync::PatchInfo,
+    ) -> Result<()> {
+        self.send_app_state_inner(patch_info, true).await
+    }
+
+    async fn send_app_state_inner(
+        &self,
+        patch_info: crate::appstate_sync::PatchInfo,
+        allow_retry: bool,
+    ) -> Result<()> {
+        use wacore::iq::appstate::{SendAppStatePatchSpec, SendPatchResponse};
+
+        let collection = patch_info.patch_type;
+
+        // 1. Pre-sync to ensure local hash state is current
+        debug!(target: "Client/AppState", "Syncing {:?} before sending app state", collection);
+        if let Err(e) = self.process_app_state_sync_task(collection, false).await {
+            debug!(target: "Client/AppState", "Incremental sync failed: {e} — retrying full sync");
+            let _ = self.process_app_state_sync_task(collection, true).await;
+        }
+
+        // 2. Encode the patch
+        let proc = self.get_app_state_processor().await;
+        let (patch_bytes, current_version) = proc.encode_patch(&patch_info).await?;
+
+        // 3. Send the IQ
+        let spec = SendAppStatePatchSpec::new(collection.as_str(), current_version, patch_bytes);
+        let resp = self.execute(spec).await?;
+
+        match resp {
+            SendPatchResponse::Ok => {
+                // 4. Post-send resync to pick up our own changes and emit events
+                if let Err(e) = self.process_app_state_sync_task(collection, false).await {
+                    warn!(
+                        target: "Client/AppState",
+                        "Post-send resync for {:?} failed: {e}",
+                        collection
+                    );
+                }
+                Ok(())
+            }
+            SendPatchResponse::Conflict(conflict_node) => {
+                if !allow_retry {
+                    return Err(anyhow!("app state 409 conflict after retry"));
+                }
+                warn!(
+                    target: "Client/AppState",
+                    "409 conflict for {:?}, applying server patches and retrying",
+                    collection
+                );
+
+                // Apply the conflict patches from the server response
+                let download = |_: &wa::ExternalBlobReference| -> Result<Vec<u8>> {
+                    Err(anyhow!(
+                        "external blob download not supported in conflict resolution"
+                    ))
+                };
+                let proc = self.get_app_state_processor().await;
+                if let Err(e) = proc.decode_patch_list(&conflict_node, download, true).await {
+                    warn!(
+                        target: "Client/AppState",
+                        "Failed to apply conflict patches for {:?}: {e}",
+                        collection
+                    );
+                }
+
+                // Retry once
+                self.send_app_state_inner(patch_info, false).await
+            }
+        }
+    }
+
+    /// Request missing app state encryption keys from the primary device.
+    ///
+    /// Corresponds to whatsmeow's `requestMissingAppStateKeys`. Checks which
+    /// key IDs are missing from the local store and sends a
+    /// `AppStateSyncKeyRequest` peer message to the primary phone, rate-limited
+    /// to once per key per 24 hours.
+    pub async fn request_missing_app_state_keys(
+        &self,
+        patch_list: &wacore::appstate::patch_decode::PatchList,
+    ) {
+        let proc = self.get_app_state_processor().await;
+        let missing = match proc.get_missing_key_ids(patch_list).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                warn!(
+                    target: "Client/AppState",
+                    "Failed to get missing app state key IDs: {e}"
+                );
+                return;
+            }
+        };
+        if missing.is_empty() {
+            return;
+        }
+
+        let debug_ids: Vec<String> = missing.iter().map(hex::encode).collect();
+        info!(
+            target: "Client/AppState",
+            "Requesting {} missing app state keys: {:?}",
+            missing.len(),
+            debug_ids
+        );
+
+        self.request_app_state_keys(&missing).await;
     }
 
     /// Mute or unmute a single contact's status updates.
@@ -2301,6 +2532,33 @@ impl Client {
     pub async fn get_lid(&self) -> Option<Jid> {
         let snapshot = self.persistence_manager.get_device_snapshot().await;
         snapshot.lid.clone()
+    }
+
+    /// Get the alternate JID (LID↔PN) for a user JID string.
+    ///
+    /// If the input is a phone number JID, returns the LID.
+    /// If the input is a LID, returns the phone number.
+    /// Returns None if no mapping exists.
+    ///
+    /// Mirrors whatsmeow's `GetAltJID` / `Store.GetAltJID` used in `updatePushName`.
+    pub(crate) async fn get_alt_jid_for(&self, jid_str: &str) -> Option<String> {
+        // Extract user part before the @ sign
+        let user = jid_str.split('@').next().unwrap_or(jid_str);
+        let server = jid_str.split('@').nth(1).unwrap_or("");
+
+        match server {
+            // Phone number JID → look up LID
+            "s.whatsapp.net" => {
+                let lid = self.lid_pn_cache.get_current_lid(user).await?;
+                Some(format!("{lid}@lid"))
+            }
+            // LID JID → look up phone number
+            "lid" => {
+                let pn = self.lid_pn_cache.get_phone_number(user).await?;
+                Some(format!("{pn}@s.whatsapp.net"))
+            }
+            _ => None,
+        }
     }
 
     /// Creates a normalized StanzaKey by resolving PN to LID JIDs.

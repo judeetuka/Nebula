@@ -1300,6 +1300,61 @@ impl SignalStore for SqliteStore {
         self.delete_sender_key_for_device(address, self.device_id)
             .await
     }
+
+    async fn migrate_pn_to_lid(&self, pn_user: &str, lid_user: &str) -> Result<()> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let pn_prefix = format!("{}%", pn_user);
+        let pn_user = pn_user.to_string();
+        let lid_user = lid_user.to_string();
+
+        self.with_semaphore(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            conn.transaction::<_, diesel::result::Error, _>(|conn| {
+                // Migrate sessions: replace pn_user prefix with lid_user in the address column
+                diesel::sql_query(
+                    "UPDATE sessions SET address = ? || substr(address, length(?) + 1) \
+                     WHERE address LIKE ? AND device_id = ?",
+                )
+                .bind::<diesel::sql_types::Text, _>(&lid_user)
+                .bind::<diesel::sql_types::Text, _>(&pn_user)
+                .bind::<diesel::sql_types::Text, _>(&pn_prefix)
+                .bind::<diesel::sql_types::Integer, _>(device_id)
+                .execute(conn)?;
+
+                // Migrate identity keys
+                diesel::sql_query(
+                    "UPDATE identities SET address = ? || substr(address, length(?) + 1) \
+                     WHERE address LIKE ? AND device_id = ?",
+                )
+                .bind::<diesel::sql_types::Text, _>(&lid_user)
+                .bind::<diesel::sql_types::Text, _>(&pn_user)
+                .bind::<diesel::sql_types::Text, _>(&pn_prefix)
+                .bind::<diesel::sql_types::Integer, _>(device_id)
+                .execute(conn)?;
+
+                // Migrate sender keys
+                diesel::sql_query(
+                    "UPDATE sender_keys SET address = ? || substr(address, length(?) + 1) \
+                     WHERE address LIKE ? AND device_id = ?",
+                )
+                .bind::<diesel::sql_types::Text, _>(&lid_user)
+                .bind::<diesel::sql_types::Text, _>(&pn_user)
+                .bind::<diesel::sql_types::Text, _>(&pn_prefix)
+                .bind::<diesel::sql_types::Integer, _>(device_id)
+                .execute(conn)?;
+
+                Ok(())
+            })
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(())
+        })
+        .await
+    }
 }
 
 #[async_trait]
@@ -1996,7 +2051,7 @@ impl ProtocolStore for SqliteStore {
         Ok(())
     }
 
-    async fn put_contact_push_name(&self, jid: &str, push_name: &str) -> Result<()> {
+    async fn put_contact_push_name(&self, jid: &str, push_name: &str) -> Result<(bool, String)> {
         let pool = self.pool.clone();
         let device_id = self.device_id;
         let jid = jid.to_string();
@@ -2005,10 +2060,21 @@ impl ProtocolStore for SqliteStore {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i32;
-        tokio::task::spawn_blocking(move || -> Result<()> {
+        tokio::task::spawn_blocking(move || -> Result<(bool, String)> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            // Read old push name first (mirrors whatsmeow PutPushName returning old name)
+            let old_push_name: String = contacts::table
+                .select(contacts::push_name)
+                .filter(contacts::jid.eq(&jid))
+                .filter(contacts::device_id.eq(device_id))
+                .first::<String>(&mut conn)
+                .unwrap_or_default();
+
+            let changed = old_push_name != push_name;
+
             diesel::insert_into(contacts::table)
                 .values((
                     contacts::jid.eq(&jid),
@@ -2024,11 +2090,10 @@ impl ProtocolStore for SqliteStore {
                 ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
+            Ok((changed, old_push_name))
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+        .map_err(|e| StoreError::Database(e.to_string()))??
     }
 
     async fn get_saved_contacts(&self) -> Result<Vec<ContactEntry>> {
@@ -2046,11 +2111,7 @@ impl ProtocolStore for SqliteStore {
                     contacts::push_name,
                 ))
                 .filter(contacts::device_id.eq(device_id))
-                .filter(
-                    contacts::full_name
-                        .ne("")
-                        .or(contacts::first_name.ne("")),
-                )
+                .filter(contacts::full_name.ne("").or(contacts::first_name.ne("")))
                 .load(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
             Ok(rows
@@ -2098,6 +2159,347 @@ impl ProtocolStore for SqliteStore {
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
+    async fn put_business_name(
+        &self,
+        jid: &str,
+        business_name: &str,
+    ) -> Result<(bool, String)> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let jid = jid.to_string();
+        let business_name = business_name.to_string();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i32;
+        tokio::task::spawn_blocking(move || -> Result<(bool, String)> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            // Read old business name first (mirrors whatsmeow PutBusinessName returning old name)
+            let old_business_name: String = contacts::table
+                .select(contacts::business_name)
+                .filter(contacts::jid.eq(&jid))
+                .filter(contacts::device_id.eq(device_id))
+                .first::<String>(&mut conn)
+                .unwrap_or_default();
+
+            let changed = old_business_name != business_name;
+
+            diesel::insert_into(contacts::table)
+                .values((
+                    contacts::jid.eq(&jid),
+                    contacts::business_name.eq(&business_name),
+                    contacts::device_id.eq(device_id),
+                    contacts::updated_at.eq(now),
+                ))
+                .on_conflict((contacts::jid, contacts::device_id))
+                .do_update()
+                .set((
+                    contacts::business_name.eq(&business_name),
+                    contacts::updated_at.eq(now),
+                ))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok((changed, old_business_name))
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??
+    }
+
+    async fn put_all_contact_names(&self, contacts: &[ContactEntry]) -> Result<()> {
+        if contacts.is_empty() {
+            return Ok(());
+        }
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let contacts: Vec<ContactEntry> = contacts.to_vec();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i32;
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            conn.transaction::<_, diesel::result::Error, _>(|conn| {
+                for c in &contacts {
+                    diesel::insert_into(contacts::table)
+                        .values((
+                            contacts::jid.eq(&c.jid),
+                            contacts::full_name.eq(&c.full_name),
+                            contacts::first_name.eq(&c.first_name),
+                            contacts::device_id.eq(device_id),
+                            contacts::updated_at.eq(now),
+                        ))
+                        .on_conflict((contacts::jid, contacts::device_id))
+                        .do_update()
+                        .set((
+                            contacts::full_name.eq(&c.full_name),
+                            contacts::first_name.eq(&c.first_name),
+                            contacts::updated_at.eq(now),
+                        ))
+                        .execute(conn)?;
+                }
+                Ok(())
+            })
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl MsgSecretStore for SqliteStore {
+    async fn put_message_secret(
+        &self,
+        chat: &str,
+        sender: &str,
+        id: &str,
+        secret: &[u8],
+    ) -> Result<()> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let chat = chat.to_string();
+        let sender = sender.to_string();
+        let id = id.to_string();
+        let secret = secret.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::insert_into(message_secrets::table)
+                .values((
+                    message_secrets::device_id.eq(device_id),
+                    message_secrets::chat_jid.eq(&chat),
+                    message_secrets::sender_jid.eq(&sender),
+                    message_secrets::message_id.eq(&id),
+                    message_secrets::secret.eq(&secret),
+                ))
+                .on_conflict((
+                    message_secrets::device_id,
+                    message_secrets::chat_jid,
+                    message_secrets::sender_jid,
+                    message_secrets::message_id,
+                ))
+                .do_update()
+                .set(message_secrets::secret.eq(&secret))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    async fn put_message_secrets(&self, inserts: &[MessageSecretInsert]) -> Result<()> {
+        if inserts.is_empty() {
+            return Ok(());
+        }
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let inserts: Vec<(String, String, String, Vec<u8>)> = inserts
+            .iter()
+            .map(|i| {
+                (
+                    i.chat.clone(),
+                    i.sender.clone(),
+                    i.id.clone(),
+                    i.secret.clone(),
+                )
+            })
+            .collect();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+
+            let values: Vec<_> = inserts
+                .iter()
+                .map(|(chat, sender, id, secret)| {
+                    (
+                        message_secrets::device_id.eq(device_id),
+                        message_secrets::chat_jid.eq(chat),
+                        message_secrets::sender_jid.eq(sender),
+                        message_secrets::message_id.eq(id),
+                        message_secrets::secret.eq(secret),
+                    )
+                })
+                .collect();
+
+            // SQLite variable limit ~999, 5 cols/row
+            const CHUNK_SIZE: usize = 199;
+
+            for chunk in values.chunks(CHUNK_SIZE) {
+                diesel::insert_into(message_secrets::table)
+                    .values(chunk)
+                    .on_conflict((
+                        message_secrets::device_id,
+                        message_secrets::chat_jid,
+                        message_secrets::sender_jid,
+                        message_secrets::message_id,
+                    ))
+                    .do_update()
+                    .set(message_secrets::secret.eq(excluded(message_secrets::secret)))
+                    .execute(&mut conn)
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    async fn get_message_secret(
+        &self,
+        chat: &str,
+        sender: &str,
+        id: &str,
+    ) -> Result<Option<(Vec<u8>, String)>> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let chat = chat.to_string();
+        let sender = sender.to_string();
+        let id = id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Option<(Vec<u8>, String)>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let row: Option<(Vec<u8>, String)> = message_secrets::table
+                .select((message_secrets::secret, message_secrets::sender_jid))
+                .filter(message_secrets::device_id.eq(device_id))
+                .filter(message_secrets::chat_jid.eq(&chat))
+                .filter(message_secrets::sender_jid.eq(&sender))
+                .filter(message_secrets::message_id.eq(&id))
+                .first(&mut conn)
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(row)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+}
+
+#[async_trait]
+impl ChatSettingsStore for SqliteStore {
+    async fn put_muted_until(&self, chat: &str, muted_until: i64) -> Result<()> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let chat = chat.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::insert_into(chat_settings::table)
+                .values((
+                    chat_settings::device_id.eq(device_id),
+                    chat_settings::chat_jid.eq(&chat),
+                    chat_settings::muted_until.eq(Some(muted_until)),
+                ))
+                .on_conflict((chat_settings::device_id, chat_settings::chat_jid))
+                .do_update()
+                .set(chat_settings::muted_until.eq(Some(muted_until)))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    async fn put_pinned(&self, chat: &str, pinned: bool) -> Result<()> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let chat = chat.to_string();
+        let pinned_int: i32 = if pinned { 1 } else { 0 };
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::insert_into(chat_settings::table)
+                .values((
+                    chat_settings::device_id.eq(device_id),
+                    chat_settings::chat_jid.eq(&chat),
+                    chat_settings::pinned.eq(pinned_int),
+                ))
+                .on_conflict((chat_settings::device_id, chat_settings::chat_jid))
+                .do_update()
+                .set(chat_settings::pinned.eq(pinned_int))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    async fn put_archived(&self, chat: &str, archived: bool) -> Result<()> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let chat = chat.to_string();
+        let archived_int: i32 = if archived { 1 } else { 0 };
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::insert_into(chat_settings::table)
+                .values((
+                    chat_settings::device_id.eq(device_id),
+                    chat_settings::chat_jid.eq(&chat),
+                    chat_settings::archived.eq(archived_int),
+                ))
+                .on_conflict((chat_settings::device_id, chat_settings::chat_jid))
+                .do_update()
+                .set(chat_settings::archived.eq(archived_int))
+                .execute(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    async fn get_chat_settings(&self, chat: &str) -> Result<ChatSettings> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let chat = chat.to_string();
+        tokio::task::spawn_blocking(move || -> Result<ChatSettings> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let row: Option<(Option<i64>, i32, i32)> = chat_settings::table
+                .select((
+                    chat_settings::muted_until,
+                    chat_settings::pinned,
+                    chat_settings::archived,
+                ))
+                .filter(chat_settings::device_id.eq(device_id))
+                .filter(chat_settings::chat_jid.eq(&chat))
+                .first(&mut conn)
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(match row {
+                Some((muted_until, pinned, archived)) => ChatSettings {
+                    muted_until,
+                    pinned: pinned != 0,
+                    archived: archived != 0,
+                },
+                None => ChatSettings::default(),
+            })
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
 }
 
 #[async_trait]

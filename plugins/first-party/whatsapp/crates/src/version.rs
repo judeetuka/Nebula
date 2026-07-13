@@ -2,21 +2,44 @@ use crate::http::{HttpClient, HttpRequest};
 use crate::store::commands::DeviceCommand;
 use crate::store::persistence_manager::PersistenceManager;
 use anyhow::{Result, anyhow};
-use log::debug;
+use log::{debug, warn};
 use std::sync::Arc;
 
 pub use wacore::version::parse_sw_js;
 
 const SW_URL: &str = "https://web.whatsapp.com/sw.js";
 
+/// WhatsApp Web homepage URL — used as a fallback version source.
+/// Mirrors whatsmeow's `socket.Origin` constant.
+const HOMEPAGE_URL: &str = "https://web.whatsapp.com";
+
+/// Chrome-like user agent for version fetch requests.
+const VERSION_FETCH_UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
+
+/// Build an HTTP request with browser-like headers for fetching WhatsApp Web pages.
+/// Mirrors the header set from whatsmeow's `GetLatestVersion` in update.go.
+fn build_version_fetch_request(url: &str) -> HttpRequest {
+    HttpRequest::get(url)
+        .with_header("user-agent", VERSION_FETCH_UA)
+        .with_header("sec-fetch-dest", "document")
+        .with_header("sec-fetch-mode", "navigate")
+        .with_header("sec-fetch-site", "none")
+        .with_header("sec-fetch-user", "?1")
+        .with_header(
+            "accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        )
+        .with_header("accept-language", "en-US,en;q=0.9")
+}
+
+/// Fetch the latest WhatsApp Web version from the sw.js service worker script.
+///
+/// This is the primary version source. Parses `client_revision` from the
+/// service worker and returns `(2, 3000, revision)`.
 pub async fn fetch_latest_app_version(
     http_client: &Arc<dyn HttpClient>,
 ) -> Result<(u32, u32, u32)> {
-    let request = HttpRequest::get(SW_URL).with_header("sec-fetch-site", "none")
-    .with_header(
-        "user-agent",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    );
+    let request = build_version_fetch_request(SW_URL);
     let response = http_client
         .execute(request)
         .await
@@ -28,6 +51,57 @@ pub async fn fetch_latest_app_version(
 
     parse_sw_js(&body_str)
         .ok_or_else(|| anyhow!("Could not find 'client_revision' version in sw.js response"))
+}
+
+/// Fetch the latest WhatsApp Web version from the homepage.
+///
+/// Fallback method matching whatsmeow's `GetLatestVersion` from `update.go`.
+/// Scrapes `https://web.whatsapp.com` and extracts `"client_revision":(\d+)`
+/// from the inline JavaScript/JSON. Returns `(2, 3000, revision)`.
+pub async fn fetch_latest_app_version_from_homepage(
+    http_client: &Arc<dyn HttpClient>,
+) -> Result<(u32, u32, u32)> {
+    let request = build_version_fetch_request(HOMEPAGE_URL);
+    let response = http_client
+        .execute(request)
+        .await
+        .map_err(|e| anyhow!("HTTP request to {} failed: {}", HOMEPAGE_URL, e))?;
+
+    let body_str = response
+        .body_string()
+        .map_err(|e| anyhow!("Failed to decode response body: {}", e))?;
+
+    // The homepage HTML contains the same client_revision field as sw.js
+    parse_sw_js(&body_str)
+        .ok_or_else(|| anyhow!("Could not find 'client_revision' in homepage response"))
+}
+
+/// Fetch the latest version, trying sw.js first then falling back to the homepage.
+///
+/// Combines both approaches for robustness. If the sw.js endpoint fails or
+/// doesn't contain the version, falls back to the homepage scraping method
+/// that matches whatsmeow's approach.
+pub async fn fetch_latest_app_version_with_fallback(
+    http_client: &Arc<dyn HttpClient>,
+) -> Result<(u32, u32, u32)> {
+    match fetch_latest_app_version(http_client).await {
+        Ok(version) => Ok(version),
+        Err(sw_err) => {
+            warn!(
+                "sw.js version fetch failed ({}), trying homepage fallback",
+                sw_err
+            );
+            fetch_latest_app_version_from_homepage(http_client)
+                .await
+                .map_err(|homepage_err| {
+                    anyhow!(
+                        "Both version fetch methods failed. sw.js: {}; homepage: {}",
+                        sw_err,
+                        homepage_err
+                    )
+                })
+        }
+    }
 }
 
 pub async fn resolve_and_update_version(
@@ -60,7 +134,7 @@ pub async fn resolve_and_update_version(
 
     if needs_fetch {
         debug!("WhatsApp version is stale or missing, fetching latest...");
-        let (p, s, t) = fetch_latest_app_version(http_client)
+        let (p, s, t) = fetch_latest_app_version_with_fallback(http_client)
             .await
             .map_err(|e| anyhow!("Failed to fetch latest WhatsApp version: {}", e))?;
         debug!("Fetched latest version: {}.{}.{}", p, s, t);
@@ -82,6 +156,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_version_fetch_urls() {
+        assert_eq!(SW_URL, "https://web.whatsapp.com/sw.js");
+        assert_eq!(HOMEPAGE_URL, "https://web.whatsapp.com");
+    }
+
+    #[test]
+    fn test_build_version_fetch_request_has_browser_headers() {
+        let req = build_version_fetch_request("https://example.com");
+        // Verify the request includes the whatsmeow-matching headers
+        assert!(req.headers.contains_key("user-agent"));
+        assert!(req.headers.contains_key("sec-fetch-dest"));
+        assert!(req.headers.contains_key("sec-fetch-mode"));
+        assert!(req.headers.contains_key("sec-fetch-site"));
+        assert!(req.headers.contains_key("sec-fetch-user"));
+        assert!(req.headers.contains_key("accept"));
+        assert!(req.headers.contains_key("accept-language"));
+        assert_eq!(req.headers["sec-fetch-dest"], "document");
+        assert_eq!(req.headers["sec-fetch-mode"], "navigate");
+        assert_eq!(req.headers["sec-fetch-user"], "?1");
+    }
+
+    #[test]
     fn test_parse_sw_js_client_revision_quoted() {
         let s = r#"var x = {"client_revision": "123456"};"#;
         assert_eq!(parse_sw_js(s), Some((2, 3000, 123456)));
@@ -97,6 +193,16 @@ mod tests {
     fn test_parse_sw_js_assets_fallback() {
         let s = "... assets-manifest-98765 ...";
         assert_eq!(parse_sw_js(s), Some((2, 3000, 0)));
+    }
+
+    #[test]
+    fn test_parse_sw_js_from_homepage_html() {
+        // Simulates the homepage HTML containing the version in inline JS,
+        // matching the whatsmeow GetLatestVersion approach.
+        let html = r#"<!DOCTYPE html><html><head><script>
+            var config = {"client_revision":1234567890,"server_revision":1234567890};
+        </script></head><body></body></html>"#;
+        assert_eq!(parse_sw_js(html), Some((2, 3000, 1234567890)));
     }
 
     #[test]

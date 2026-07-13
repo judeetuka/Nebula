@@ -286,37 +286,41 @@ class _CreateClusterModalState extends ConsumerState<_CreateClusterModal> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      appBar: AppBar(
-        elevation: 0,
-        backgroundColor: Colors.transparent,
-        leading: IconButton(
-          icon: const Icon(IconlyBroken.arrow_left_2),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(
-          'New Cluster',
-          style: theme.textTheme.titleLarge?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
-      body: Center(
-        child: SingleChildScrollView(
-          controller: ModalScrollController.of(context),
-          padding: const EdgeInsets.symmetric(
-            horizontal: UIConstants.spacingXL,
-            vertical: UIConstants.spacingXXL,
-          ),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 460),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
+    return Material(
+      type: MaterialType.transparency,
+      child: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            // Drag handle — always at top
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.only(top: 12, bottom: 8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            // Scrollable form content
+            Expanded(
+              child: Center(
+                child: SingleChildScrollView(
+                  controller: SheetScrollController.of(context),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: UIConstants.spacingXL,
+                    vertical: UIConstants.spacingXL,
+                  ),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 460),
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
                   // Icon header
                   Center(
                     child: Container(
@@ -471,8 +475,10 @@ class _CreateClusterModalState extends ConsumerState<_CreateClusterModal> {
           ),
         ),
       ),
+      ),
+      ],
+      ),
+      ),
     );
   }
 }
-
-// ModalScrollController is from modal_bottom_sheet, re-exported by manny_ui

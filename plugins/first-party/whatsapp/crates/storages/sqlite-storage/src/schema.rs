@@ -37,6 +37,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    chat_settings (device_id, chat_jid) {
+        device_id -> Integer,
+        chat_jid -> Text,
+        muted_until -> Nullable<BigInt>,
+        pinned -> Integer,
+        archived -> Integer,
+    }
+}
+
+diesel::table! {
     contacts (jid, device_id) {
         jid -> Text,
         full_name -> Text,
@@ -44,6 +54,7 @@ diesel::table! {
         push_name -> Text,
         device_id -> Integer,
         updated_at -> Integer,
+        business_name -> Text,
     }
 }
 
@@ -97,6 +108,16 @@ diesel::table! {
         learning_source -> Text,
         updated_at -> BigInt,
         device_id -> Integer,
+    }
+}
+
+diesel::table! {
+    message_secrets (device_id, chat_jid, sender_jid, message_id) {
+        device_id -> Integer,
+        chat_jid -> Text,
+        sender_jid -> Text,
+        message_id -> Text,
+        secret -> Binary,
     }
 }
 
@@ -167,11 +188,13 @@ diesel::allow_tables_to_appear_in_same_query!(
     app_state_mutation_macs,
     app_state_versions,
     base_keys,
+    chat_settings,
     contacts,
     device,
     device_registry,
     identities,
     lid_pn_mapping,
+    message_secrets,
     prekeys,
     sender_key_status,
     sender_keys,

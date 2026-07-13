@@ -1026,6 +1026,9 @@ impl Client {
     }
 
     /// Reject an incoming call.
+    ///
+    /// Removes the call from the store and sends a `<reject>` stanza to the
+    /// caller. Uses `wacore::call::build_reject_call` for node construction.
     pub async fn reject_call(&self, call_id: &str) -> Result<(), anyhow::Error> {
         let call = self
             .call_store
@@ -1042,16 +1045,12 @@ impl Client {
 
         let msg_id = self.generate_message_id().await;
 
-        let node = NodeBuilder::new("call")
-            .attr("id", &msg_id)
-            .attr("from", own_jid.to_string())
-            .attr("to", caller.to_string())
-            .children(vec![NodeBuilder::new("reject")
-                .attr("call-id", &call.call_id)
-                .attr("call-creator", caller.to_string())
-                .attr("count", "0")
-                .build()])
-            .build();
+        let node = wacore::call::build_reject_call(&wacore::call::RejectCallParams {
+            message_id: msg_id,
+            own_jid,
+            caller: caller.clone(),
+            call_id: call.call_id.clone(),
+        });
 
         info!("Rejecting call {} from {}", call_id, caller);
         self.send_node(node)

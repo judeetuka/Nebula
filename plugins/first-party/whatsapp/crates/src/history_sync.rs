@@ -208,6 +208,32 @@ impl Client {
                     }
                 }
 
+                // Store ALL push names from history sync (mirrors whatsmeow handleHistoricalPushNames)
+                if !sync_result.push_names.is_empty() {
+                    log::info!(
+                        "Storing {} push names from history sync",
+                        sync_result.push_names.len()
+                    );
+                    for (jid_str, push_name) in &sync_result.push_names {
+                        let jid_user = jid_str.split('@').next().unwrap_or(jid_str);
+                        let full_jid = if jid_str.contains('@') {
+                            jid_str.clone()
+                        } else {
+                            format!("{jid_user}@s.whatsapp.net")
+                        };
+                        if let Err(e) = self
+                            .persistence_manager
+                            .backend()
+                            .put_contact_push_name(&full_jid, push_name)
+                            .await
+                        {
+                            log::debug!(
+                                "Failed to store historical push name for {full_jid}: {e}"
+                            );
+                        }
+                    }
+                }
+
                 // Update own push name if found
                 if let Some(new_name) = sync_result.own_pushname {
                     log::info!("Updating own push name from history sync to '{new_name}'");

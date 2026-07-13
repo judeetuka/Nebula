@@ -332,6 +332,7 @@ pub enum Event {
     ContactUpdate(ContactUpdate),
 
     PushNameUpdate(PushNameUpdate),
+    BusinessNameUpdate(BusinessNameUpdate),
     SelfPushNameUpdated(SelfPushNameUpdated),
     PinUpdate(PinUpdate),
     MuteUpdate(MuteUpdate),
@@ -352,6 +353,27 @@ pub enum Event {
     CallOffer(CallOffer),
     /// Call terminated (ended, rejected, or timed out).
     CallTerminate(CallTerminate),
+
+    /// Signal identity key changed for a contact (encrypt notification with <identity>)
+    IdentityChange(IdentityChange),
+
+    /// Blocklist update (account_sync notification with <blocklist>)
+    Blocklist(Blocklist),
+
+    /// Newsletter live update (messages in a newsletter channel)
+    NewsletterLiveUpdate(NewsletterLiveUpdate),
+
+    /// Newsletter join event (via MEX notification)
+    NewsletterJoin(NewsletterJoin),
+
+    /// Newsletter leave event (via MEX notification)
+    NewsletterLeave(NewsletterLeave),
+
+    /// Newsletter mute state change (via MEX notification)
+    NewsletterMuteChange(NewsletterMuteChange),
+
+    /// Privacy settings changed (account_sync notification)
+    PrivacySettingsChanged(PrivacySettingsChanged),
 
     StreamReplaced(StreamReplaced),
     TemporaryBan(TemporaryBan),
@@ -633,6 +655,17 @@ pub struct PushNameUpdate {
     pub new_push_name: String,
 }
 
+/// Business (verified) name update for a contact.
+/// Mirrors whatsmeow events.BusinessName.
+#[derive(Debug, Clone, Serialize)]
+pub struct BusinessNameUpdate {
+    pub jid: Jid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jid_alt: Option<Jid>,
+    pub old_business_name: String,
+    pub new_business_name: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PinUpdate {
     pub jid: Jid,
@@ -697,4 +730,117 @@ pub struct CallTerminate {
     pub timestamp: i64,
     /// Reason for termination (if provided).
     pub reason: Option<String>,
+}
+
+/// Identity key changed for a user (Signal protocol re-key).
+/// Mirrors whatsmeow events.IdentityChange.
+///
+/// Emitted when an encrypt notification contains an `<identity>` child,
+/// meaning the user's Signal identity key has changed and all existing
+/// sessions/identities for that user should be deleted.
+#[derive(Debug, Clone, Serialize)]
+pub struct IdentityChange {
+    /// The JID whose identity key changed.
+    pub jid: Jid,
+    /// Timestamp of the identity change notification.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Blocklist change action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum BlocklistChangeAction {
+    Block,
+    Unblock,
+    Unknown(String),
+}
+
+impl From<&str> for BlocklistChangeAction {
+    fn from(s: &str) -> Self {
+        match s {
+            "block" => Self::Block,
+            "unblock" => Self::Unblock,
+            other => Self::Unknown(other.to_string()),
+        }
+    }
+}
+
+/// Blocklist overall action (initial load vs incremental).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum BlocklistAction {
+    Default,
+    Modify,
+    Unknown(String),
+}
+
+impl From<&str> for BlocklistAction {
+    fn from(s: &str) -> Self {
+        match s {
+            "" => Self::Default,
+            "modify" => Self::Modify,
+            other => Self::Unknown(other.to_string()),
+        }
+    }
+}
+
+/// Individual change within a blocklist update.
+#[derive(Debug, Clone, Serialize)]
+pub struct BlocklistChange {
+    pub jid: Jid,
+    pub action: BlocklistChangeAction,
+}
+
+/// Blocklist update notification.
+/// Mirrors whatsmeow events.Blocklist.
+#[derive(Debug, Clone, Serialize)]
+pub struct Blocklist {
+    pub action: BlocklistAction,
+    pub dhash: String,
+    pub prev_dhash: Option<String>,
+    pub changes: Vec<BlocklistChange>,
+}
+
+/// Newsletter live update notification.
+/// Mirrors whatsmeow events.NewsletterLiveUpdate.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterLiveUpdate {
+    pub jid: Jid,
+    pub time: DateTime<Utc>,
+    pub messages: Vec<crate::types::newsletter::NewsletterMessage>,
+}
+
+/// Newsletter join notification (via MEX GraphQL push).
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterJoin {
+    pub jid: Jid,
+}
+
+/// Newsletter leave notification (via MEX GraphQL push).
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterLeave {
+    pub jid: Jid,
+}
+
+/// Newsletter mute state change notification (via MEX GraphQL push).
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterMuteChange {
+    pub jid: Jid,
+    pub mute: crate::types::newsletter::NewsletterMuteState,
+}
+
+/// Status text update for a user.
+/// Mirrors whatsmeow events.UserAbout — dispatched from status notifications.
+/// (Note: UserAboutUpdate already exists but is used for general about updates;
+/// this mirrors the Go `handleStatusNotification` path.)
+#[derive(Debug, Clone, Serialize)]
+pub struct StatusNotification {
+    pub jid: Jid,
+    pub timestamp: DateTime<Utc>,
+    pub status: String,
+}
+
+/// Privacy settings changed notification.
+/// Wraps the detailed change event from the privacy module.
+#[derive(Debug, Clone, Serialize)]
+pub struct PrivacySettingsChanged {
+    pub changes: Vec<crate::notification::PrivacySettingChange>,
 }

@@ -271,6 +271,15 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
         }
     };
 
+    // Verify pairing ref matches (whatsmeow checks this to prevent replay attacks)
+    let notification_pairing_ref = reg_node
+        .get_optional_child_by_tag(&["link_code_pairing_ref"])
+        .and_then(|n| n.content.as_ref())
+        .and_then(|c| match c {
+            NodeContent::Bytes(b) => Some(b.clone()),
+            _ => None,
+        });
+
     // Get current pair code state
     let mut state_guard = client.pair_code_state.lock().await;
     let state = std::mem::take(&mut *state_guard);
@@ -291,6 +300,17 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
             return false;
         }
     };
+
+    // Verify the pairing ref from notification matches what we got in stage 1
+    if let Some(ref notif_ref) = notification_pairing_ref {
+        if notif_ref.as_slice() != pairing_ref.as_slice() {
+            warn!(
+                target: "Client/PairCode",
+                "Pairing ref mismatch in code pair notification"
+            );
+            return false;
+        }
+    }
 
     info!(
         target: "Client/PairCode",
@@ -325,14 +345,10 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
     // Get device keys
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
 
-    // Prepare encrypted key bundle
-    // TODO: Store `new_adv_secret` via DeviceCommand::SetAdvSecretKey to enable HMAC
-    // Known limitation: ADV secret key generated but not persisted.
-    // Pairing works because HMAC check in wacore is bypassed.
-    // Fix requires DeviceCommand::SetAdvSecretKey in persistence layer.
-    // verification in pair-success. Currently the HMAC check in do_pair_crypto is
-    // commented out, so pairing works without it. See wacore/src/pair.rs:147-153.
-    let (wrapped_bundle, _new_adv_secret) = match PairCodeUtils::prepare_key_bundle(
+    // Prepare encrypted key bundle and derive the new ADV secret key.
+    // The ADV secret MUST be stored before pair-success arrives, because
+    // do_pair_crypto uses it for HMAC verification of the device identity.
+    let (wrapped_bundle, new_adv_secret) = match PairCodeUtils::prepare_key_bundle(
         &ephemeral_keypair,
         &primary_ephemeral_pub,
         &primary_identity_pub,
@@ -344,6 +360,21 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
             return false;
         }
     };
+
+    // Store the new ADV secret key BEFORE pair-success arrives.
+    // This is critical: do_pair_crypto uses adv_secret_key for HMAC verification
+    // of the signed device identity in the pair-success response.
+    client
+        .persistence_manager
+        .process_command(crate::store::commands::DeviceCommand::SetAdvSecretKey(
+            new_adv_secret,
+        ))
+        .await;
+
+    info!(
+        target: "Client/PairCode",
+        "Stored new ADV secret key for pair-success HMAC verification"
+    );
 
     // Build and send stage 2 IQ
     let req_id = client.generate_request_id();

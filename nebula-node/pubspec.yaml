@@ -15,7 +15,7 @@ dependencies:
     path: rust_builder
   flutter_rust_bridge: 2.11.1
   manny_ui:
-    path: ../shared/manny_ui
+    path: ../../../manny_ui
   webview_flutter: ^4.13.0
   shared_preferences: ^2.3.4
   mobile_scanner: ^6.0.0

@@ -925,107 +925,12 @@ class _NotifCard extends StatelessWidget {
   });
 
   void _showDetailModal(BuildContext context) {
-    final theme = Theme.of(context);
-
-    FrostedModal.showCupertino(
+    AppAlertDialog.show(
       context: context,
-      builder: (context) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.all(UIConstants.spacingXL),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Drag handle
-              Center(
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: UIConstants.spacingXL),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-
-              // Icon and color
-              Center(
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(UIConstants.radiusLarge),
-                  ),
-                  child: Icon(icon, size: 32, color: color),
-                ),
-              ),
-
-              const SizedBox(height: UIConstants.spacingXL),
-
-              // Title (larger)
-              Text(
-                title,
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: -0.3,
-                ),
-              ),
-
-              const SizedBox(height: UIConstants.spacingMD),
-
-              // Full description
-              Text(
-                subtitle,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                  height: 1.5,
-                ),
-              ),
-
-              const SizedBox(height: UIConstants.spacingLG),
-
-              // Timestamp
-              Row(
-                children: [
-                  Icon(
-                    IconlyBroken.time_circle,
-                    size: 16,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
-                  ),
-                  const SizedBox(width: UIConstants.spacingSM),
-                  Text(
-                    time,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: UIConstants.spacingXXL),
-
-              // Dismiss button
-              SizedBox(
-                width: double.infinity,
-                height: UIConstants.buttonLG,
-                child: FilledButton.icon(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(IconlyBroken.shield_done, size: 18),
-                  label: const Text('Acknowledge'),
-                  style: FilledButton.styleFrom(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(UIConstants.radiusMedium),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+      title: title,
+      message: '$subtitle\n\n$time',
+      actionText: 'Acknowledge',
+      onActionPressed: () {},
     );
   }
 

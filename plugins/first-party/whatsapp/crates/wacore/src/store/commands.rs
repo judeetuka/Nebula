@@ -15,6 +15,9 @@ pub enum DeviceCommand {
         Option<wa::device_props::PlatformType>,
     ),
     SetPropsHash(Option<String>),
+    /// Update the ADV secret key. Used by pair-code flow to store the
+    /// derived secret before pair-success arrives (needed for HMAC verification).
+    SetAdvSecretKey([u8; 32]),
 }
 
 pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
@@ -42,6 +45,9 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
         }
         DeviceCommand::SetPropsHash(hash) => {
             device.props_hash = hash;
+        }
+        DeviceCommand::SetAdvSecretKey(key) => {
+            device.adv_secret_key = key;
         }
     }
 }

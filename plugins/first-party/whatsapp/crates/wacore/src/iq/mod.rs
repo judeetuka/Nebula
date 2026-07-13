@@ -1,3 +1,4 @@
+pub mod appstate;
 pub mod blocklist;
 pub mod chatstate;
 pub mod contacts;

@@ -6,6 +6,7 @@ use hkdf::Hkdf;
 use hmac::Hmac;
 use hmac::Mac;
 use sha2::Sha256;
+use std::path::Path;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::ExternalBlobReference;
 use waproto::whatsapp::message::HistorySyncNotification;
@@ -156,6 +157,97 @@ impl_downloadable!(wa::message::AudioMessage, MediaType::Audio, file_length);
 impl_downloadable!(wa::message::StickerMessage, MediaType::Sticker, file_length);
 impl_downloadable!(ExternalBlobReference, MediaType::AppState, file_size_bytes);
 impl_downloadable!(HistorySyncNotification, MediaType::History, file_length);
+
+// ---------------------------------------------------------------------------
+// DownloadableThumbnail trait
+// ---------------------------------------------------------------------------
+
+/// Trait for messages that carry an encrypted thumbnail attachment
+/// (e.g., link preview thumbnails in ExtendedTextMessage, or document/image
+/// thumbnails). Mirrors whatsmeow's `DownloadableThumbnail` interface.
+pub trait DownloadableThumbnail: Sync + Send {
+    fn thumbnail_direct_path(&self) -> Option<&str>;
+    fn thumbnail_sha256(&self) -> Option<&[u8]>;
+    fn thumbnail_enc_sha256(&self) -> Option<&[u8]>;
+    fn media_key(&self) -> Option<&[u8]>;
+    fn thumbnail_media_type(&self) -> MediaType;
+}
+
+/// ExtendedTextMessage thumbnails are link preview thumbnails.
+impl DownloadableThumbnail for wa::message::ExtendedTextMessage {
+    fn thumbnail_direct_path(&self) -> Option<&str> {
+        self.thumbnail_direct_path.as_deref()
+    }
+    fn thumbnail_sha256(&self) -> Option<&[u8]> {
+        self.thumbnail_sha256.as_deref()
+    }
+    fn thumbnail_enc_sha256(&self) -> Option<&[u8]> {
+        self.thumbnail_enc_sha256.as_deref()
+    }
+    fn media_key(&self) -> Option<&[u8]> {
+        self.media_key.as_deref()
+    }
+    fn thumbnail_media_type(&self) -> MediaType {
+        MediaType::LinkThumbnail
+    }
+}
+
+/// ImageMessage can carry mid-quality or thumbnail paths.
+impl DownloadableThumbnail for wa::message::ImageMessage {
+    fn thumbnail_direct_path(&self) -> Option<&str> {
+        self.thumbnail_direct_path.as_deref()
+    }
+    fn thumbnail_sha256(&self) -> Option<&[u8]> {
+        self.thumbnail_sha256.as_deref()
+    }
+    fn thumbnail_enc_sha256(&self) -> Option<&[u8]> {
+        self.thumbnail_enc_sha256.as_deref()
+    }
+    fn media_key(&self) -> Option<&[u8]> {
+        self.media_key.as_deref()
+    }
+    fn thumbnail_media_type(&self) -> MediaType {
+        MediaType::Image
+    }
+}
+
+/// VideoMessage thumbnails.
+impl DownloadableThumbnail for wa::message::VideoMessage {
+    fn thumbnail_direct_path(&self) -> Option<&str> {
+        self.thumbnail_direct_path.as_deref()
+    }
+    fn thumbnail_sha256(&self) -> Option<&[u8]> {
+        self.thumbnail_sha256.as_deref()
+    }
+    fn thumbnail_enc_sha256(&self) -> Option<&[u8]> {
+        self.thumbnail_enc_sha256.as_deref()
+    }
+    fn media_key(&self) -> Option<&[u8]> {
+        self.media_key.as_deref()
+    }
+    fn thumbnail_media_type(&self) -> MediaType {
+        MediaType::Image
+    }
+}
+
+/// DocumentMessage thumbnails.
+impl DownloadableThumbnail for wa::message::DocumentMessage {
+    fn thumbnail_direct_path(&self) -> Option<&str> {
+        self.thumbnail_direct_path.as_deref()
+    }
+    fn thumbnail_sha256(&self) -> Option<&[u8]> {
+        self.thumbnail_sha256.as_deref()
+    }
+    fn thumbnail_enc_sha256(&self) -> Option<&[u8]> {
+        self.thumbnail_enc_sha256.as_deref()
+    }
+    fn media_key(&self) -> Option<&[u8]> {
+        self.media_key.as_deref()
+    }
+    fn thumbnail_media_type(&self) -> MediaType {
+        MediaType::Image
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct DownloadRequest {
@@ -478,6 +570,177 @@ impl DownloadUtils {
             .map_err(|e| anyhow!(e.to_string()))?;
         Ok(output)
     }
+
+    // -------------------------------------------------------------------
+    // Download URL construction
+    // -------------------------------------------------------------------
+
+    /// Build a download URL from a direct path and media connection.
+    ///
+    /// Mirrors whatsmeow's `DownloadMediaWithPath` URL construction:
+    /// `https://{host}{direct_path}&hash={base64url(enc_sha256)}&mms-type={type}&__wa-mms=`
+    ///
+    /// Returns one URL per host in `media_conn`, to be tried in order.
+    pub fn build_download_urls(
+        direct_path: &str,
+        enc_file_hash: &[u8],
+        media_type: MediaType,
+        media_conn: &MediaConnection,
+    ) -> Result<Vec<String>> {
+        if !direct_path.starts_with('/') {
+            return Err(anyhow!(
+                "Media download path does not start with slash: {}",
+                direct_path
+            ));
+        }
+        let hash_token = BASE64_URL_SAFE.encode(enc_file_hash);
+        let mms_type = media_type.mms_type();
+
+        let urls: Vec<String> = media_conn
+            .hosts
+            .iter()
+            .map(|host| {
+                format!(
+                    "https://{}{}&hash={}&mms-type={}&__wa-mms=",
+                    host.hostname, direct_path, hash_token, mms_type,
+                )
+            })
+            .collect();
+
+        if urls.is_empty() {
+            return Err(anyhow!("No media hosts available"));
+        }
+        Ok(urls)
+    }
+
+    /// Build download URL from a [`Downloadable`] message + media connection.
+    ///
+    /// This is a higher-level wrapper around [`build_download_urls`] that
+    /// extracts the needed fields from the downloadable trait object.
+    pub fn build_download_url_from_msg(
+        downloadable: &dyn Downloadable,
+        media_conn: &MediaConnection,
+    ) -> Result<Vec<String>> {
+        // Prefer static URL if available.
+        if let Some(static_url) = downloadable.static_url() {
+            return Ok(vec![static_url.to_string()]);
+        }
+
+        let direct_path = downloadable
+            .direct_path()
+            .ok_or_else(|| anyhow!("Missing direct_path"))?;
+
+        let enc_hash = if downloadable.is_encrypted() {
+            downloadable
+                .file_enc_sha256()
+                .ok_or_else(|| anyhow!("Missing file_enc_sha256"))?
+        } else {
+            downloadable
+                .file_sha256()
+                .ok_or_else(|| anyhow!("Missing file_sha256 for unencrypted media"))?
+        };
+
+        Self::build_download_urls(direct_path, enc_hash, downloadable.app_info(), media_conn)
+    }
+
+    /// Build download URLs for a thumbnail attachment.
+    pub fn build_thumbnail_download_urls(
+        thumb: &dyn DownloadableThumbnail,
+        media_conn: &MediaConnection,
+    ) -> Result<Vec<String>> {
+        let direct_path = thumb
+            .thumbnail_direct_path()
+            .ok_or_else(|| anyhow!("Missing thumbnail_direct_path"))?;
+        let enc_hash = thumb
+            .thumbnail_enc_sha256()
+            .ok_or_else(|| anyhow!("Missing thumbnail_enc_sha256"))?;
+
+        Self::build_download_urls(
+            direct_path,
+            enc_hash,
+            thumb.thumbnail_media_type(),
+            media_conn,
+        )
+    }
+
+    // -------------------------------------------------------------------
+    // Streaming decrypt to file
+    // -------------------------------------------------------------------
+
+    /// Streaming download-and-decrypt to a file path.
+    ///
+    /// Reads encrypted data from `reader`, decrypts with AES-256-CBC,
+    /// verifies HMAC-SHA256, and writes decrypted plaintext to `output_path`.
+    /// Returns the number of plaintext bytes written.
+    ///
+    /// This mirrors whatsmeow's `DownloadToFile` approach: the encrypted
+    /// stream is processed in chunks without buffering the entire payload.
+    pub fn decrypt_stream_to_file<R: std::io::Read>(
+        reader: R,
+        media_key: &[u8],
+        media_type: MediaType,
+        output_path: &Path,
+    ) -> Result<u64> {
+        let file = std::fs::File::create(output_path)
+            .map_err(|e| anyhow!("Failed to create output file: {}", e))?;
+        let mut writer = std::io::BufWriter::new(file);
+        let bytes = Self::decrypt_stream_to_writer(reader, media_key, media_type, &mut writer)?;
+        std::io::Write::flush(&mut writer)?;
+        Ok(bytes)
+    }
+
+    /// Streaming download-and-decrypt for plaintext (newsletter) media to a file.
+    ///
+    /// Reads unencrypted data from `reader`, validates SHA-256 hash,
+    /// and writes to `output_path`.
+    pub fn copy_plaintext_to_file<R: std::io::Read>(
+        reader: R,
+        expected_sha256: &[u8],
+        output_path: &Path,
+    ) -> Result<u64> {
+        let file = std::fs::File::create(output_path)
+            .map_err(|e| anyhow!("Failed to create output file: {}", e))?;
+        let mut writer = std::io::BufWriter::new(file);
+        let bytes =
+            Self::copy_and_validate_plaintext_to_writer(reader, expected_sha256, &mut writer)?;
+        std::io::Write::flush(&mut writer)?;
+        Ok(bytes)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DownloadAny: convenience dispatcher
+// ---------------------------------------------------------------------------
+
+/// Identifies which media sub-message is present in a `wa::Message` and
+/// returns a reference to it as a `&dyn Downloadable`.
+///
+/// Mirrors whatsmeow's `DownloadAny` — inspects the message and returns the
+/// first non-nil downloadable attachment. The caller then feeds the
+/// downloadable to `DownloadUtils::prepare_download_requests` and
+/// `DownloadUtils::decrypt_stream`.
+pub fn download_any_ref(msg: &wa::Message) -> Result<&dyn Downloadable> {
+    if let Some(ref m) = msg.image_message {
+        return Ok(m.as_ref());
+    }
+    if let Some(ref m) = msg.video_message {
+        return Ok(m.as_ref());
+    }
+    if let Some(ref m) = msg.audio_message {
+        return Ok(m.as_ref());
+    }
+    if let Some(ref m) = msg.document_message {
+        return Ok(m.as_ref());
+    }
+    if let Some(ref m) = msg.sticker_message {
+        return Ok(m.as_ref());
+    }
+    Err(anyhow!("No downloadable media found in message"))
+}
+
+/// Returns the [`MediaType`] for the first downloadable sub-message.
+pub fn media_type_of(msg: &wa::Message) -> Option<MediaType> {
+    download_any_ref(msg).ok().map(|d| d.app_info())
 }
 
 #[cfg(test)]
@@ -653,5 +916,367 @@ mod tests {
             DownloadUtils::copy_and_validate_plaintext_to_writer(reader, &wrong_hash, &mut writer)
                 .unwrap_err();
         assert!(err.to_string().contains("SHA-256 mismatch"));
+    }
+
+    // -------------------------------------------------------------------
+    // Tests for build_download_urls
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn build_download_urls_basic() {
+        let enc_hash = [0xAA; 32];
+        let urls = DownloadUtils::build_download_urls(
+            "/v/t1/media.enc",
+            &enc_hash,
+            MediaType::Image,
+            &mock_media_conn(),
+        )
+        .unwrap();
+
+        assert_eq!(urls.len(), 2);
+        let hash_token = BASE64_URL_SAFE.encode(&enc_hash);
+        assert!(urls[0].starts_with("https://cdn1.example.com/v/t1/media.enc"));
+        assert!(urls[0].contains(&format!("hash={}", hash_token)));
+        assert!(urls[0].contains("mms-type=image"));
+        assert!(urls[0].ends_with("__wa-mms="));
+        assert!(urls[1].starts_with("https://cdn2.example.com"));
+    }
+
+    #[test]
+    fn build_download_urls_invalid_path() {
+        let err = DownloadUtils::build_download_urls(
+            "no-slash",
+            &[0; 32],
+            MediaType::Image,
+            &mock_media_conn(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("does not start with slash"));
+    }
+
+    #[test]
+    fn build_download_urls_no_hosts() {
+        let conn = MediaConnection {
+            hosts: vec![],
+            auth: "tok".into(),
+        };
+        let err =
+            DownloadUtils::build_download_urls("/path", &[0; 32], MediaType::Image, &conn)
+                .unwrap_err();
+        assert!(err.to_string().contains("No media hosts"));
+    }
+
+    #[test]
+    fn build_download_url_from_msg_encrypted() {
+        let d = MockDownloadable {
+            direct_path: Some("/v/t1/encrypted.enc".into()),
+            static_url: None,
+            media_key: Some(vec![1; 32]),
+            file_sha256: Some(vec![2; 32]),
+            file_enc_sha256: Some(vec![3; 32]),
+            media_type: MediaType::Video,
+        };
+        let urls = DownloadUtils::build_download_url_from_msg(&d, &mock_media_conn()).unwrap();
+        assert_eq!(urls.len(), 2);
+        assert!(urls[0].contains("mms-type=video"));
+        // Should use file_enc_sha256 as hash token.
+        let expected_token = BASE64_URL_SAFE.encode([3u8; 32]);
+        assert!(urls[0].contains(&format!("hash={}", expected_token)));
+    }
+
+    #[test]
+    fn build_download_url_from_msg_static_url() {
+        let d = MockDownloadable {
+            direct_path: Some("/unused".into()),
+            static_url: Some("https://static.cdn.example.com/vid/xyz".into()),
+            media_key: None,
+            file_sha256: Some(vec![5; 32]),
+            file_enc_sha256: None,
+            media_type: MediaType::Image,
+        };
+        let urls = DownloadUtils::build_download_url_from_msg(&d, &mock_media_conn()).unwrap();
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0], "https://static.cdn.example.com/vid/xyz");
+    }
+
+    // -------------------------------------------------------------------
+    // Tests for DownloadableThumbnail
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn thumbnail_trait_extended_text() {
+        let etm = wa::message::ExtendedTextMessage {
+            thumbnail_direct_path: Some("/thumb/path".into()),
+            thumbnail_sha256: Some(vec![0xAA; 32]),
+            thumbnail_enc_sha256: Some(vec![0xBB; 32]),
+            media_key: Some(vec![0xCC; 32]),
+            ..Default::default()
+        };
+        assert_eq!(etm.thumbnail_direct_path(), Some("/thumb/path"));
+        assert_eq!(etm.thumbnail_media_type(), MediaType::LinkThumbnail);
+        assert_eq!(etm.thumbnail_enc_sha256().unwrap().len(), 32);
+
+        let urls =
+            DownloadUtils::build_thumbnail_download_urls(&etm, &mock_media_conn()).unwrap();
+        assert_eq!(urls.len(), 2);
+        assert!(urls[0].contains("mms-type=thumbnail-link"));
+    }
+
+    #[test]
+    fn thumbnail_trait_image_message() {
+        let img = wa::message::ImageMessage {
+            thumbnail_direct_path: Some("/img/thumb".into()),
+            thumbnail_sha256: Some(vec![0x11; 32]),
+            thumbnail_enc_sha256: Some(vec![0x22; 32]),
+            media_key: Some(vec![0x33; 32]),
+            ..Default::default()
+        };
+        assert_eq!(img.thumbnail_direct_path(), Some("/img/thumb"));
+        assert_eq!(img.thumbnail_media_type(), MediaType::Image);
+    }
+
+    #[test]
+    fn thumbnail_trait_video_message() {
+        let vid = wa::message::VideoMessage {
+            thumbnail_direct_path: Some("/vid/thumb".into()),
+            thumbnail_sha256: Some(vec![0x44; 32]),
+            thumbnail_enc_sha256: Some(vec![0x55; 32]),
+            media_key: Some(vec![0x66; 32]),
+            ..Default::default()
+        };
+        assert_eq!(vid.thumbnail_direct_path(), Some("/vid/thumb"));
+        assert_eq!(vid.thumbnail_media_type(), MediaType::Image);
+    }
+
+    #[test]
+    fn thumbnail_trait_document_message() {
+        let doc = wa::message::DocumentMessage {
+            thumbnail_direct_path: Some("/doc/thumb".into()),
+            thumbnail_sha256: Some(vec![0x77; 32]),
+            thumbnail_enc_sha256: Some(vec![0x88; 32]),
+            media_key: Some(vec![0x99; 32]),
+            ..Default::default()
+        };
+        assert_eq!(doc.thumbnail_direct_path(), Some("/doc/thumb"));
+        assert_eq!(doc.thumbnail_media_type(), MediaType::Image);
+    }
+
+    #[test]
+    fn thumbnail_missing_path_errors() {
+        let etm = wa::message::ExtendedTextMessage {
+            thumbnail_direct_path: None,
+            thumbnail_enc_sha256: Some(vec![0xBB; 32]),
+            media_key: Some(vec![0xCC; 32]),
+            ..Default::default()
+        };
+        let err =
+            DownloadUtils::build_thumbnail_download_urls(&etm, &mock_media_conn()).unwrap_err();
+        assert!(err.to_string().contains("thumbnail_direct_path"));
+    }
+
+    // -------------------------------------------------------------------
+    // Tests for download_any_ref
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn download_any_image() {
+        let msg = wa::Message {
+            image_message: Some(Box::new(wa::message::ImageMessage {
+                direct_path: Some("/img/path".into()),
+                media_key: Some(vec![1; 32]),
+                file_sha256: Some(vec![2; 32]),
+                file_enc_sha256: Some(vec![3; 32]),
+                file_length: Some(4096),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let d = download_any_ref(&msg).unwrap();
+        assert_eq!(d.app_info(), MediaType::Image);
+        assert_eq!(d.direct_path(), Some("/img/path"));
+    }
+
+    #[test]
+    fn download_any_video() {
+        let msg = wa::Message {
+            video_message: Some(Box::new(wa::message::VideoMessage {
+                direct_path: Some("/vid/path".into()),
+                media_key: Some(vec![1; 32]),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let d = download_any_ref(&msg).unwrap();
+        assert_eq!(d.app_info(), MediaType::Video);
+    }
+
+    #[test]
+    fn download_any_audio() {
+        let msg = wa::Message {
+            audio_message: Some(Box::new(wa::message::AudioMessage {
+                direct_path: Some("/aud/path".into()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let d = download_any_ref(&msg).unwrap();
+        assert_eq!(d.app_info(), MediaType::Audio);
+    }
+
+    #[test]
+    fn download_any_document() {
+        let msg = wa::Message {
+            document_message: Some(Box::new(wa::message::DocumentMessage {
+                direct_path: Some("/doc/path".into()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let d = download_any_ref(&msg).unwrap();
+        assert_eq!(d.app_info(), MediaType::Document);
+    }
+
+    #[test]
+    fn download_any_sticker() {
+        let msg = wa::Message {
+            sticker_message: Some(Box::new(wa::message::StickerMessage {
+                direct_path: Some("/stk/path".into()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let d = download_any_ref(&msg).unwrap();
+        assert_eq!(d.app_info(), MediaType::Sticker);
+    }
+
+    #[test]
+    fn download_any_empty_message() {
+        let msg = wa::Message::default();
+        let err = download_any_ref(&msg).unwrap_err();
+        assert!(err.to_string().contains("No downloadable media"));
+    }
+
+    #[test]
+    fn download_any_priority_order() {
+        // When multiple media types present, image wins (checked first).
+        let msg = wa::Message {
+            image_message: Some(Box::new(wa::message::ImageMessage {
+                direct_path: Some("/img".into()),
+                ..Default::default()
+            })),
+            video_message: Some(Box::new(wa::message::VideoMessage {
+                direct_path: Some("/vid".into()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let d = download_any_ref(&msg).unwrap();
+        assert_eq!(d.app_info(), MediaType::Image);
+    }
+
+    #[test]
+    fn media_type_of_returns_correct_type() {
+        let msg = wa::Message {
+            audio_message: Some(Box::new(wa::message::AudioMessage::default())),
+            ..Default::default()
+        };
+        assert_eq!(media_type_of(&msg), Some(MediaType::Audio));
+    }
+
+    #[test]
+    fn media_type_of_empty_is_none() {
+        let msg = wa::Message::default();
+        assert_eq!(media_type_of(&msg), None);
+    }
+
+    // -------------------------------------------------------------------
+    // Tests for decrypt_stream_to_file
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn decrypt_stream_to_file_roundtrip() {
+        use crate::upload::encrypt_media;
+
+        let plaintext = b"Decrypt to file test payload with some content.";
+        let enc = encrypt_media(plaintext, MediaType::Image).unwrap();
+
+        let tmp = std::env::temp_dir().join("wacore_test_decrypt_to_file.bin");
+        let reader = std::io::Cursor::new(enc.data_to_upload.clone());
+        let bytes = DownloadUtils::decrypt_stream_to_file(
+            reader,
+            &enc.media_key,
+            MediaType::Image,
+            &tmp,
+        )
+        .unwrap();
+
+        assert_eq!(bytes, plaintext.len() as u64);
+        let content = std::fs::read(&tmp).unwrap();
+        assert_eq!(content, plaintext);
+
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    // -------------------------------------------------------------------
+    // Tests for Downloadable trait implementations on protobuf types
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn downloadable_image_message() {
+        let img = wa::message::ImageMessage {
+            direct_path: Some("/enc/img".into()),
+            media_key: Some(vec![1; 32]),
+            file_sha256: Some(vec![2; 32]),
+            file_enc_sha256: Some(vec![3; 32]),
+            file_length: Some(9000),
+            static_url: Some("https://cdn.example.com/static".into()),
+            ..Default::default()
+        };
+        assert_eq!(img.direct_path(), Some("/enc/img"));
+        assert_eq!(img.media_key().unwrap().len(), 32);
+        assert_eq!(img.file_length(), Some(9000));
+        assert_eq!(img.app_info(), MediaType::Image);
+        assert_eq!(img.static_url(), Some("https://cdn.example.com/static"));
+        assert!(img.is_encrypted());
+    }
+
+    #[test]
+    fn downloadable_sticker_no_static_url() {
+        let stk = wa::message::StickerMessage {
+            direct_path: Some("/stk".into()),
+            media_key: None,
+            ..Default::default()
+        };
+        assert_eq!(stk.static_url(), None);
+        assert!(!stk.is_encrypted());
+        assert_eq!(stk.app_info(), MediaType::Sticker);
+    }
+
+    #[test]
+    fn downloadable_external_blob() {
+        let blob = ExternalBlobReference {
+            direct_path: Some("/blob/path".into()),
+            media_key: Some(vec![9; 32]),
+            file_sha256: Some(vec![10; 32]),
+            file_enc_sha256: Some(vec![11; 32]),
+            file_size_bytes: Some(65536),
+            ..Default::default()
+        };
+        assert_eq!(blob.app_info(), MediaType::AppState);
+        assert_eq!(blob.file_length(), Some(65536));
+    }
+
+    #[test]
+    fn downloadable_history_sync() {
+        let hsn = HistorySyncNotification {
+            direct_path: Some("/hist/path".into()),
+            media_key: Some(vec![12; 32]),
+            file_sha256: Some(vec![13; 32]),
+            file_enc_sha256: Some(vec![14; 32]),
+            file_length: Some(1048576),
+            ..Default::default()
+        };
+        assert_eq!(hsn.app_info(), MediaType::History);
+        assert_eq!(hsn.file_length(), Some(1048576));
     }
 }

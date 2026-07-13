@@ -27,6 +27,12 @@ pub struct HistorySyncResult {
     /// LID-PN mappings extracted from field 15 (phone_number_to_lid_mappings).
     /// Each entry is (pn_jid, lid_jid) as raw JID strings from the protobuf.
     pub lid_pn_mappings: Vec<(String, String)>,
+
+    /// All push names extracted from field 7 (pushnames).
+    /// Each entry is (jid_string, push_name).
+    /// Mirrors whatsmeow's handleHistoricalPushNames which stores ALL push names,
+    /// not just the user's own.
+    pub push_names: Vec<(String, String)>,
 }
 
 mod wire_type {
@@ -68,18 +74,24 @@ where
                 }
             }
 
-            7 if own_user.is_some()
-                && result.own_pushname.is_none()
-                && wire_type_raw == wire_type::LENGTH_DELIMITED =>
-            {
+            // Field 7: pushnames — process ALL push names (mirrors whatsmeow handleHistoricalPushNames)
+            7 if wire_type_raw == wire_type::LENGTH_DELIMITED => {
                 let raw_bytes = cis.read_bytes()?;
 
-                if let Ok(pn) = wa::Pushname::decode(raw_bytes.as_slice())
-                    && let Some(ref id) = pn.id
-                    && Some(id.as_str()) == own_user
-                    && let Some(name) = pn.pushname
-                {
-                    result.own_pushname = Some(name);
+                if let Ok(pn) = wa::Pushname::decode(raw_bytes.as_slice()) {
+                    if let (Some(id), Some(name)) = (pn.id, pn.pushname) {
+                        // Skip placeholder "-" push names (same as whatsmeow)
+                        if name != "-" {
+                            // Track own push name separately
+                            if own_user.is_some()
+                                && result.own_pushname.is_none()
+                                && Some(id.as_str()) == own_user
+                            {
+                                result.own_pushname = Some(name.clone());
+                            }
+                            result.push_names.push((id, name));
+                        }
+                    }
                 }
             }
 

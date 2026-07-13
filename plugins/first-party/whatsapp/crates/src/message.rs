@@ -65,7 +65,61 @@ pub(crate) enum RetryReason {
 
 impl Client {
     /// Dispatches a successfully parsed message to the event bus and sends a delivery receipt.
+    ///
+    /// Also tracks push name changes from the sender — whatsmeow stores push names
+    /// from every incoming message via PutPushName and emits PushNameUpdate events
+    /// when the name changes.
     fn dispatch_parsed_message(self: &Arc<Self>, msg: wa::Message, info: &MessageInfo) {
+        // Track push name from incoming messages (mirrors whatsmeow's updatePushName).
+        // The "notify" attribute on message nodes contains the sender's push name.
+        // Skip "-" as it's a placeholder, and skip "username" for Messenger configs.
+        if !info.push_name.is_empty()
+            && info.push_name != "-"
+            && !info.source.is_from_me
+        {
+            let sender_jid = info.source.sender.to_non_ad().to_string();
+            let push_name = info.push_name.clone();
+            let client = self.clone();
+            let msg_info = Box::new(info.clone());
+            tokio::spawn(async move {
+                // Store push name and check if it changed (mirrors whatsmeow PutPushName)
+                match client
+                    .persistence_manager
+                    .backend()
+                    .put_contact_push_name(&sender_jid, &push_name)
+                    .await
+                {
+                    Ok((true, old_push_name)) => {
+                        // Push name changed — also store under LID if known
+                        if let Some(alt_jid) = client.get_alt_jid_for(&sender_jid).await {
+                            let _ = client
+                                .persistence_manager
+                                .backend()
+                                .put_contact_push_name(&alt_jid, &push_name)
+                                .await;
+                        }
+                        // Dispatch PushNameUpdate event
+                        let sender = wacore_binary::jid::Jid::try_from(sender_jid.as_str())
+                            .unwrap_or_default();
+                        client.core.event_bus.dispatch(
+                            &Event::PushNameUpdate(crate::types::events::PushNameUpdate {
+                                jid: sender,
+                                message: msg_info,
+                                old_push_name,
+                                new_push_name: push_name,
+                            }),
+                        );
+                    }
+                    Ok((false, _)) => {
+                        // Push name unchanged, nothing to do
+                    }
+                    Err(e) => {
+                        log::debug!("Failed to store push name for {sender_jid}: {e}");
+                    }
+                }
+            });
+        }
+
         // Send delivery receipt immediately in the background.
         let client_clone = self.clone();
         let info_clone = info.clone();
@@ -476,6 +530,25 @@ impl Client {
             match enc_type.as_str() {
                 "pkmsg" | "msg" => session_enc_nodes.push(enc_node),
                 "skmsg" => group_content_enc_nodes.push(enc_node),
+                "msmsg" => {
+                    // Bot message (Meta AI) — decrypt using message secret store.
+                    // Mirrors whatsmeow's msmsg handling in handleDecryptedMessage.
+                    let client = self.clone();
+                    let info_clone = info.clone();
+                    let enc_content = match &enc_node.content {
+                        Some(wacore_binary::node::NodeContent::Bytes(b)) => b.clone(),
+                        _ => {
+                            log::warn!("[msg:{}] msmsg enc node has no byte content", info.id);
+                            continue;
+                        }
+                    };
+                    let node_clone = node.clone();
+                    tokio::spawn(async move {
+                        client
+                            .handle_msmsg_enc(&info_clone, &enc_content, &node_clone)
+                            .await;
+                    });
+                }
                 _ => log::warn!("Unknown enc type: {enc_type}"),
             }
         }
@@ -1200,6 +1273,180 @@ impl Client {
                 Ok(())
             }
             Err(e) => Err(anyhow::anyhow!("Failed to decode decrypted plaintext: {e}")),
+        }
+    }
+
+    /// Handle an `msmsg` enc node (bot message from Meta AI).
+    ///
+    /// Mirrors whatsmeow's msmsg handling: resolves the target sender, determines
+    /// the decrypt message ID (handling bot edit types), retrieves the message
+    /// secret from the store, unmarshals the `MessageSecretMessage` protobuf,
+    /// and decrypts using `decrypt_bot_message`.
+    ///
+    /// On failure, sends a NACK with `MISSING_MESSAGE_SECRET` (495).
+    async fn handle_msmsg_enc(
+        self: &Arc<Self>,
+        info: &Arc<MessageInfo>,
+        enc_content: &[u8],
+        node: &Arc<Node>,
+    ) {
+        use wacore::msgsecret::decrypt_bot_message;
+        use wacore::types::message::BotEditType;
+        use wacore_binary::jid::BOT_SERVER;
+
+        if !info.source.sender.is_bot() {
+            log::warn!(
+                "[msg:{}] Received msmsg from non-bot sender {}, ignoring",
+                info.id,
+                info.source.sender
+            );
+            return;
+        }
+
+        // Resolve target sender JID — mirrors whatsmeow's targetSenderJID logic.
+        // Default to own LID for bot server senders, own PN otherwise.
+        let target_sender = match &info.meta_info.target_sender {
+            Some(ts) if !ts.is_empty() => ts.clone(),
+            _ => {
+                if info.source.sender.server == BOT_SERVER {
+                    match self.get_lid().await {
+                        Some(lid) => lid,
+                        None => {
+                            log::warn!(
+                                "[msg:{}] Cannot resolve target sender: no own LID available",
+                                info.id
+                            );
+                            self.send_msmsg_nack(node).await;
+                            return;
+                        }
+                    }
+                } else {
+                    match self.get_pn().await {
+                        Some(pn) => pn,
+                        None => {
+                            log::warn!(
+                                "[msg:{}] Cannot resolve target sender: no own PN available",
+                                info.id
+                            );
+                            self.send_msmsg_nack(node).await;
+                            return;
+                        }
+                    }
+                }
+            }
+        };
+
+        // Determine the message ID to use for decryption — for bot edits,
+        // use the edit target ID instead of the current message ID.
+        let decrypt_message_id = match &info.bot_info {
+            Some(bot_info)
+                if bot_info.edit_type == Some(BotEditType::Inner)
+                    || bot_info.edit_type == Some(BotEditType::Last) =>
+            {
+                bot_info
+                    .edit_target_id
+                    .as_deref()
+                    .unwrap_or(&info.id)
+                    .to_string()
+            }
+            _ => info.id.clone(),
+        };
+
+        // Get the target message ID for the secret lookup.
+        let target_id = info
+            .meta_info
+            .target_id
+            .as_deref()
+            .unwrap_or(&info.id);
+
+        // Retrieve the message secret from the store.
+        let backend = self.persistence_manager.backend();
+        let chat_str = info.source.chat.to_string();
+        let target_sender_str = target_sender.to_string();
+
+        let message_secret = match backend
+            .get_message_secret(&chat_str, &target_sender_str, target_id)
+            .await
+        {
+            Ok(Some((secret, _sender))) => secret,
+            Ok(None) => {
+                log::warn!(
+                    "[msg:{}] No message secret found for msmsg (chat={}, sender={}, target_id={})",
+                    info.id,
+                    chat_str,
+                    target_sender_str,
+                    target_id
+                );
+                self.send_msmsg_nack(node).await;
+                return;
+            }
+            Err(e) => {
+                log::error!(
+                    "[msg:{}] Failed to get message secret for msmsg: {e}",
+                    info.id
+                );
+                self.send_msmsg_nack(node).await;
+                return;
+            }
+        };
+
+        // Unmarshal the MessageSecretMessage protobuf from the enc node content.
+        let ms_msg = match wa::MessageSecretMessage::decode(enc_content) {
+            Ok(m) => m,
+            Err(e) => {
+                log::warn!(
+                    "[msg:{}] Failed to decode MessageSecretMessage protobuf: {e}",
+                    info.id
+                );
+                self.send_msmsg_nack(node).await;
+                return;
+            }
+        };
+
+        // Decrypt the bot message.
+        match decrypt_bot_message(
+            &message_secret,
+            &ms_msg,
+            &decrypt_message_id,
+            &target_sender,
+            &info.source.sender,
+        ) {
+            Ok(plaintext) => {
+                match wa::Message::decode(plaintext.as_slice()) {
+                    Ok(msg) => {
+                        log::info!(
+                            "[msg:{}] Successfully decrypted msmsg from bot {}",
+                            info.id,
+                            info.source.sender
+                        );
+                        self.dispatch_parsed_message(msg, info);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[msg:{}] Failed to decode decrypted msmsg plaintext: {e}",
+                            info.id
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "[msg:{}] Failed to decrypt msmsg from bot {}: {e:?}",
+                    info.id,
+                    info.source.sender
+                );
+                self.send_msmsg_nack(node).await;
+            }
+        }
+    }
+
+    /// Send a NACK with MISSING_MESSAGE_SECRET (495) for a failed msmsg decryption.
+    async fn send_msmsg_nack(self: &Arc<Self>, node: &Node) {
+        use wacore::receipt::{build_ack, nack};
+
+        let nack_node = build_ack(node, nack::MISSING_MESSAGE_SECRET);
+        if let Err(e) = self.send_node(nack_node).await {
+            log::warn!("Failed to send msmsg NACK: {e:?}");
         }
     }
 

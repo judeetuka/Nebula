@@ -289,15 +289,17 @@ impl PairCodeUtils {
                 NodeBuilder::new("companion_server_auth_key_pub")
                     .bytes(noise_static_pub.to_vec())
                     .build(),
+                // whatsmeow sends platform_id as string content (e.g. "1"), not bytes
                 NodeBuilder::new("companion_platform_id")
-                    .bytes(platform_id.as_str().as_bytes().to_vec())
+                    .string_content(platform_id.as_str().to_string())
                     .build(),
+                // whatsmeow sends platform_display as string content, not bytes
                 NodeBuilder::new("companion_platform_display")
-                    .bytes(platform_display.as_bytes().to_vec())
+                    .string_content(platform_display.to_string())
                     .build(),
-                // Nonce is sent as string "0" (matching whatsmeow/baileys)
+                // whatsmeow sends []byte{0} — a single null byte (0x00), NOT ASCII '0' (0x30)
                 NodeBuilder::new("link_code_pairing_nonce")
-                    .bytes(b"0".to_vec())
+                    .bytes(vec![0u8])
                     .build(),
             ])
             .build();
