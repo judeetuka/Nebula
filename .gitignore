@@ -38,6 +38,10 @@ blob-report/
 firebase-debug.log
 *.db
 
+# Tool/agent working directories
+.sisyphus/
+.codex/
+
 # Separate repositories — excluded from this project
 shared/
 ui_showcase/
